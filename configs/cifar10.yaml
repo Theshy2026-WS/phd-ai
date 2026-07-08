@@ -1,0 +1,17 @@
+dataset:
+  name: cifar10
+  batch_size: 64
+  data_dir: ./data
+  input_channels: 3
+  num_classes: 10
+
+model:
+  name: cnn
+
+training:
+  epochs: 10
+  learning_rate: 0.001
+
+checkpoint:
+  save_dir: checkpoints
+  save_best: true
