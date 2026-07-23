@@ -8,6 +8,7 @@ from datasets.mnist import get_mnist_loaders
 from datasets.cifar10 import get_cifar10_loaders
 
 from models.cnn import CNN
+from models.vit import ViT
 from trainer.train import train, test
 
 
@@ -110,10 +111,29 @@ def main():
             **model_args
         ).to(device)
 
+    elif config["model"]["name"] == "vit":
+        model_args = {
+            key: value
+            for key, value in config["model"].items()
+            if key != "name"
+        }
+        model = ViT(
+            input_channels=config["dataset"]["input_channels"],
+            num_classes=config["dataset"]["num_classes"],
+            **model_args
+        ).to(device)
+
     else:
         raise ValueError(
             f"Unsupported model: {config['model']['name']}"
         )
+
+    trainable_parameters = sum(
+        parameter.numel()
+        for parameter in model.parameters()
+        if parameter.requires_grad
+    )
+    print(f"Trainable parameters: {trainable_parameters:,}")
 
     optimizer = torch.optim.AdamW(
         model.parameters(),

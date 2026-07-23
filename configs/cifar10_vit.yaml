@@ -1,0 +1,28 @@
+experiment_name: cifar10_vit_baseline
+
+dataset:
+  name: cifar10
+  batch_size: 64
+  data_dir: ./data
+  input_channels: 3
+  num_classes: 10
+
+model:
+  name: vit
+  image_size: 32
+  patch_size: 4
+  embed_dim: 192
+  depth: 5
+  num_heads: 3
+  mlp_ratio: 4.0
+  dropout: 0.1
+  attention_dropout: 0.0
+
+training:
+  epochs: 10
+  learning_rate: 0.0003
+  weight_decay: 0.05
+
+checkpoint:
+  save_dir: checkpoints
+  save_best: true
