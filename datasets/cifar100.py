@@ -2,7 +2,7 @@ from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 
 
-def get_cifar100_loaders(batch_size, data_dir="./data"):
+def get_cifar100_loaders(batch_size, data_dir="./data", download=False):
     transform_train = transforms.Compose([
         transforms.RandomHorizontalFlip(),
         transforms.RandomCrop(32, padding=4),
@@ -24,13 +24,13 @@ def get_cifar100_loaders(batch_size, data_dir="./data"):
     train_data = datasets.CIFAR100(
         root=data_dir,
         train=True,
-        download=False,
+        download=download,
         transform=transform_train,
     )
     test_data = datasets.CIFAR100(
         root=data_dir,
         train=False,
-        download=False,
+        download=download,
         transform=transform_test,
     )
 

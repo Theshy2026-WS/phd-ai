@@ -143,7 +143,8 @@ def main():
     elif dataset_name == "cifar100":
         train_loader, test_loader = get_cifar100_loaders(
             batch_size=config["dataset"]["batch_size"],
-            data_dir=config["dataset"]["data_dir"]
+            data_dir=config["dataset"]["data_dir"],
+            download=config["dataset"].get("download", False)
         )
 
     else:

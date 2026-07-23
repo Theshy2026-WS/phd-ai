@@ -4,6 +4,7 @@ dataset:
   name: cifar100
   batch_size: 64
   data_dir: ./data
+  download: true
   image_size: 32
   input_channels: 3
   num_classes: 100
