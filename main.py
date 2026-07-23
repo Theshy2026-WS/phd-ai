@@ -8,6 +8,7 @@ from datasets.mnist import get_mnist_loaders
 from datasets.cifar10 import get_cifar10_loaders
 
 from models.cnn import CNN
+from models.hybrid import CNNViTHybrid
 from models.vit import ViT
 from trainer.train import train, test
 
@@ -155,6 +156,18 @@ def main():
             if key != "name"
         }
         model = ViT(
+            input_channels=config["dataset"]["input_channels"],
+            num_classes=config["dataset"]["num_classes"],
+            **model_args
+        ).to(device)
+
+    elif config["model"]["name"] == "hybrid":
+        model_args = {
+            key: value
+            for key, value in config["model"].items()
+            if key != "name"
+        }
+        model = CNNViTHybrid(
             input_channels=config["dataset"]["input_channels"],
             num_classes=config["dataset"]["num_classes"],
             **model_args
