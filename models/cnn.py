@@ -99,6 +99,32 @@ class ResidualBlock(nn.Module):
         return self.activation(self.residual(x) + self.shortcut(x))
 
 
+class ECAAttention(nn.Module):
+    """Efficient Channel Attention with a small 1D channel convolution."""
+
+    def __init__(self, channels, kernel_size=3):
+        super().__init__()
+        if kernel_size <= 0 or kernel_size % 2 == 0:
+            raise ValueError("ECA kernel_size must be a positive odd number")
+
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.channel_conv = nn.Conv1d(
+            in_channels=1,
+            out_channels=1,
+            kernel_size=kernel_size,
+            padding=kernel_size // 2,
+            bias=False,
+        )
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        weights = self.pool(x)
+        weights = weights.squeeze(-1).transpose(-1, -2)
+        weights = self.channel_conv(weights)
+        weights = weights.transpose(-1, -2).unsqueeze(-1)
+        return x * self.sigmoid(weights)
+
+
 class CNN(nn.Module):
     """Build a CNN from an ordered list of YAML module specifications."""
 
@@ -128,7 +154,19 @@ class CNN(nn.Module):
             out_channels = spec.pop("out_channels", current_channels)
             block_activation = spec.pop("activation", activation)
 
-            if block_type == "conv":
+            if block_type == "eca":
+                if out_channels != current_channels:
+                    raise ValueError(
+                        f"ECA block at position {index} cannot change channel count"
+                    )
+                layers.append(
+                    ECAAttention(
+                        channels=current_channels,
+                        **spec,
+                    )
+                )
+                continue
+            elif block_type == "conv":
                 block_class = ConvBlock
             elif block_type == "residual":
                 block_class = ResidualBlock

@@ -1,4 +1,4 @@
-experiment_name: cifar10_cnn5_residual
+experiment_name: cifar10_cnn9_residual_eca
 
 dataset:
   name: cifar10
@@ -12,28 +12,35 @@ model:
   activation: relu
   dropout: 0.2
 
-  # Three ConvBlocks + two convolutions inside the ResidualBlock = 5 conv layers.
-  # stride: 2 replaces a separate pooling layer and halves width/height.
+  # One ConvBlock + four ResidualBlocks (two convs each) = 9 conv layers.
+  # ECA adds lightweight channel attention without changing feature dimensions.
+  # stride: 2 halves the spatial width and height.
   architecture:
     - type: conv
       out_channels: 64
       kernel_size: 3
       stride: 1
-    - type: conv
+    - type: residual
       out_channels: 64
       kernel_size: 3
-      stride: 2
-    - type: conv
+      stride: 1
+    - type: residual
       out_channels: 128
       kernel_size: 3
       stride: 2
     - type: residual
-      out_channels: 128
+      out_channels: 256
+      kernel_size: 3
+      stride: 2
+    - type: residual
+      out_channels: 256
       kernel_size: 3
       stride: 1
+    - type: eca
+      kernel_size: 3
 
 training:
-  epochs: 10
+  epochs: 25
   learning_rate: 0.001
   weight_decay: 0.0005
 
