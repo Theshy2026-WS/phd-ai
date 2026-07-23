@@ -38,6 +38,43 @@ def get_device():
     )
 
 
+def build_scheduler(optimizer, training_config):
+    scheduler_config = training_config.get("scheduler")
+    if not scheduler_config:
+        return None
+
+    scheduler_name = scheduler_config.get("name", "").lower()
+    if scheduler_name != "cosine":
+        raise ValueError(f"Unsupported scheduler: {scheduler_name}")
+
+    total_epochs = training_config["epochs"]
+    warmup_epochs = scheduler_config.get("warmup_epochs", 0)
+    min_lr = scheduler_config.get("min_lr", 0.0)
+
+    if warmup_epochs < 0 or warmup_epochs >= total_epochs:
+        raise ValueError("warmup_epochs must be between 0 and epochs - 1")
+
+    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=total_epochs - warmup_epochs,
+        eta_min=min_lr,
+    )
+    if warmup_epochs == 0:
+        return cosine_scheduler
+
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimizer,
+        start_factor=scheduler_config.get("warmup_start_factor", 0.1),
+        end_factor=1.0,
+        total_iters=warmup_epochs,
+    )
+    return torch.optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[warmup_epochs],
+    )
+
+
 def save_checkpoint(
     model,
     optimizer,
@@ -140,8 +177,11 @@ def main():
         lr=config["training"]["learning_rate"],
         weight_decay=config["training"].get("weight_decay", 0.0)
     )
+    scheduler = build_scheduler(optimizer, config["training"])
 
-    loss_fn = torch.nn.CrossEntropyLoss()
+    loss_fn = torch.nn.CrossEntropyLoss(
+        label_smoothing=config["training"].get("label_smoothing", 0.0)
+    )
 
     os.makedirs("results", exist_ok=True)
     os.makedirs(config["checkpoint"]["save_dir"], exist_ok=True)
@@ -151,6 +191,7 @@ def main():
     best_test_acc = 0.0
 
     for epoch in range(1, config["training"]["epochs"] + 1):
+        current_lr = optimizer.param_groups[0]["lr"]
 
         train_acc = train(
             model,
@@ -170,13 +211,15 @@ def main():
         print(
             f"Epoch {epoch}: "
             f"Train Acc = {train_acc:.4f}, "
-            f"Test Acc = {test_acc:.4f}"
+            f"Test Acc = {test_acc:.4f}, "
+            f"LR = {current_lr:.6f}"
         )
 
         history.append({
             "epoch": epoch,
             "train_acc": train_acc,
-            "test_acc": test_acc
+            "test_acc": test_acc,
+            "learning_rate": current_lr
         })
 
         if (
@@ -202,6 +245,9 @@ def main():
                 f"Best checkpoint saved: {checkpoint_path} "
                 f"with test_acc={test_acc:.4f}"
             )
+
+        if scheduler is not None:
+            scheduler.step()
 
     result_df = pd.DataFrame(history)
 
