@@ -12,7 +12,11 @@ from trainer.train import train, test
 
 
 def load_config(config_name):
-    config_path = os.path.join("configs", config_name)
+    project_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = config_name
+
+    if not os.path.isabs(config_path) and not os.path.exists(config_path):
+        config_path = os.path.join(project_dir, "configs", config_name)
 
     if not os.path.exists(config_path):
         raise FileNotFoundError(
@@ -66,8 +70,13 @@ def main():
     config = load_config(args.config)
 
     device = get_device()
+    experiment_name = config.get(
+        "experiment_name",
+        f"{config['dataset']['name']}_{config['model']['name']}"
+    )
 
     print("Using config:", args.config)
+    print("Experiment:", experiment_name)
     print("Device:", device)
 
     dataset_name = config["dataset"]["name"]
@@ -90,9 +99,15 @@ def main():
         )
 
     if config["model"]["name"] == "cnn":
+        model_args = {
+            key: value
+            for key, value in config["model"].items()
+            if key != "name"
+        }
         model = CNN(
             input_channels=config["dataset"]["input_channels"],
-            num_classes=config["dataset"]["num_classes"]
+            num_classes=config["dataset"]["num_classes"],
+            **model_args
         ).to(device)
 
     else:
@@ -100,9 +115,10 @@ def main():
             f"Unsupported model: {config['model']['name']}"
         )
 
-    optimizer = torch.optim.Adam(
+    optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=config["training"]["learning_rate"]
+        lr=config["training"]["learning_rate"],
+        weight_decay=config["training"].get("weight_decay", 0.0)
     )
 
     loss_fn = torch.nn.CrossEntropyLoss()
@@ -151,7 +167,7 @@ def main():
 
             checkpoint_path = os.path.join(
                 config["checkpoint"]["save_dir"],
-                f"{dataset_name}_{config['model']['name']}_best.pt"
+                f"{experiment_name}_best.pt"
             )
 
             save_checkpoint(
@@ -171,7 +187,7 @@ def main():
 
     result_path = os.path.join(
         "results",
-        f"{dataset_name}_{config['model']['name']}_results.csv"
+        f"{experiment_name}_results.csv"
     )
 
     result_df.to_csv(
