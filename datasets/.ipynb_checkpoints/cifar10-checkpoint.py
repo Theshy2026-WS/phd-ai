@@ -25,14 +25,14 @@ def get_cifar10_loaders(batch_size, data_dir="./data"):
     train_data = datasets.CIFAR10(
         root=data_dir,
         train=True,
-        download=True,
+        download=False,
         transform=transform_train
     )
 
     test_data = datasets.CIFAR10(
         root=data_dir,
         train=False,
-        download=True,
+        download=False,
         transform=transform_test
     )
 
