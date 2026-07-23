@@ -3,14 +3,17 @@ import torch
 import argparse
 import os
 import pandas as pd
+import time
 
 from datasets.mnist import get_mnist_loaders
 from datasets.cifar10 import get_cifar10_loaders
+from datasets.cifar100 import get_cifar100_loaders
 
 from models.cnn import CNN
 from models.hybrid import CNNViTHybrid
 from models.vit import ViT
 from trainer.train import train, test
+from utils.profiling import estimate_model_flops, format_large_number
 
 
 def load_config(config_name):
@@ -37,6 +40,11 @@ def get_device():
         if torch.cuda.is_available()
         else "cpu"
     )
+
+
+def synchronize_device(device):
+    if str(device).startswith("cuda"):
+        torch.cuda.synchronize()
 
 
 def build_scheduler(optimizer, training_config):
@@ -132,6 +140,12 @@ def main():
             data_dir=config["dataset"]["data_dir"]
         )
 
+    elif dataset_name == "cifar100":
+        train_loader, test_loader = get_cifar100_loaders(
+            batch_size=config["dataset"]["batch_size"],
+            data_dir=config["dataset"]["data_dir"]
+        )
+
     else:
         raise ValueError(
             f"Unsupported dataset: {dataset_name}"
@@ -184,6 +198,23 @@ def main():
         if parameter.requires_grad
     )
     print(f"Trainable parameters: {trainable_parameters:,}")
+    image_size = config["dataset"].get(
+        "image_size",
+        28 if dataset_name == "mnist" else 32,
+    )
+    estimated_flops = estimate_model_flops(
+        model=model,
+        input_shape=(
+            config["dataset"]["input_channels"],
+            image_size,
+            image_size,
+        ),
+        device=device,
+    )
+    print(
+        "Estimated forward FLOPs (batch=1, 1 MAC=2 FLOPs): "
+        f"{format_large_number(estimated_flops)}"
+    )
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -202,10 +233,15 @@ def main():
     history = []
 
     best_test_acc = 0.0
+    total_train_seconds = 0.0
+    total_test_seconds = 0.0
+    experiment_start = time.perf_counter()
 
     for epoch in range(1, config["training"]["epochs"] + 1):
         current_lr = optimizer.param_groups[0]["lr"]
 
+        synchronize_device(device)
+        train_start = time.perf_counter()
         train_acc = train(
             model,
             train_loader,
@@ -214,25 +250,39 @@ def main():
             device,
             epoch
         )
+        synchronize_device(device)
+        train_seconds = time.perf_counter() - train_start
 
+        synchronize_device(device)
+        test_start = time.perf_counter()
         test_acc = test(
             model,
             test_loader,
             device
         )
+        synchronize_device(device)
+        test_seconds = time.perf_counter() - test_start
+        epoch_seconds = train_seconds + test_seconds
+        total_train_seconds += train_seconds
+        total_test_seconds += test_seconds
 
         print(
             f"Epoch {epoch}: "
             f"Train Acc = {train_acc:.4f}, "
             f"Test Acc = {test_acc:.4f}, "
-            f"LR = {current_lr:.6f}"
+            f"LR = {current_lr:.6f}, "
+            f"Train Time = {train_seconds:.2f}s, "
+            f"Test Time = {test_seconds:.2f}s"
         )
 
         history.append({
             "epoch": epoch,
             "train_acc": train_acc,
             "test_acc": test_acc,
-            "learning_rate": current_lr
+            "learning_rate": current_lr,
+            "train_seconds": train_seconds,
+            "test_seconds": test_seconds,
+            "epoch_seconds": epoch_seconds,
         })
 
         if (
@@ -274,8 +324,12 @@ def main():
         index=False
     )
 
+    experiment_seconds = time.perf_counter() - experiment_start
     print(f"Results saved to {result_path}")
     print(f"Best Test Acc: {best_test_acc:.4f}")
+    print(f"Total Train Time: {total_train_seconds:.2f}s")
+    print(f"Total Test Time: {total_test_seconds:.2f}s")
+    print(f"Total Experiment Time: {experiment_seconds:.2f}s")
 
 
 if __name__ == "__main__":

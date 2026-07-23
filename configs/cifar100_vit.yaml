@@ -1,0 +1,35 @@
+experiment_name: cifar100_vit_baseline
+
+dataset:
+  name: cifar100
+  batch_size: 64
+  data_dir: ./data
+  image_size: 32
+  input_channels: 3
+  num_classes: 100
+
+model:
+  name: vit
+  image_size: 32
+  patch_size: 4
+  embed_dim: 224
+  depth: 5
+  num_heads: 4
+  mlp_ratio: 4.0
+  dropout: 0.1
+  attention_dropout: 0.0
+
+training:
+  epochs: 25
+  learning_rate: 0.0005
+  weight_decay: 0.05
+  label_smoothing: 0.1
+  scheduler:
+    name: cosine
+    warmup_epochs: 3
+    warmup_start_factor: 0.1
+    min_lr: 0.00001
+
+checkpoint:
+  save_dir: checkpoints
+  save_best: true
