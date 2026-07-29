@@ -46,6 +46,7 @@ def test(model, loader, device):
     model.eval()
 
     correct = 0
+    top5_correct = 0
     total_seen = 0
 
     progress_bar = tqdm(
@@ -61,15 +62,27 @@ def test(model, loader, device):
 
             output = model(x)
             pred = output.argmax(1)
+            top5_pred = output.topk(
+                min(5, output.size(1)),
+                dim=1,
+            ).indices
 
             correct += (pred == y).sum().item()
+            top5_correct += (
+                top5_pred == y.unsqueeze(1)
+            ).any(dim=1).sum().item()
             total_seen += x.size(0)
 
             accuracy = correct / total_seen
+            top5_accuracy = top5_correct / total_seen
 
             progress_bar.set_postfix({
                 "acc": f"{accuracy:.4f}",
+                "top5": f"{top5_accuracy:.4f}",
                 "images": f"{total_seen}/{len(loader.dataset)}"
             })
 
-    return correct / len(loader.dataset)
+    return (
+        correct / len(loader.dataset),
+        top5_correct / len(loader.dataset),
+    )

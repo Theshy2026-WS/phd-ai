@@ -1,0 +1,58 @@
+experiment_name: tiny_imagenet_cnn_vit_hybrid
+
+dataset:
+  name: tiny_imagenet
+  batch_size: 64
+  data_dir: ./data
+  download: true
+  image_size: 64
+  input_channels: 3
+  num_classes: 200
+  evaluation_split: development
+  validation_fraction: 0.1
+  split_seed: 42
+  num_workers: 4
+
+model:
+  name: hybrid
+  image_size: 64
+  activation: relu
+  cnn_architecture:
+    - type: conv
+      out_channels: 64
+      kernel_size: 3
+      stride: 1
+    - type: residual
+      out_channels: 64
+      kernel_size: 3
+      stride: 1
+    - type: residual
+      out_channels: 128
+      kernel_size: 3
+      stride: 2
+    - type: residual
+      out_channels: 256
+      kernel_size: 3
+      stride: 2
+
+  embed_dim: 256
+  transformer_depth: 2
+  num_heads: 4
+  mlp_ratio: 4.0
+  dropout: 0.1
+  attention_dropout: 0.0
+
+training:
+  epochs: 25
+  learning_rate: 0.0005
+  weight_decay: 0.05
+  label_smoothing: 0.1
+  scheduler:
+    name: cosine
+    warmup_epochs: 3
+    warmup_start_factor: 0.1
+    min_lr: 0.00001
+
+checkpoint:
+  save_dir: checkpoints
+  save_best: true

@@ -8,6 +8,7 @@ import time
 from datasets.mnist import get_mnist_loaders
 from datasets.cifar10 import get_cifar10_loaders
 from datasets.cifar100 import get_cifar100_loaders
+from datasets.tiny_imagenet import get_tiny_imagenet_loaders
 
 from models.cnn import CNN
 from models.hybrid import CNNViTHybrid
@@ -147,6 +148,23 @@ def main():
             download=config["dataset"].get("download", False)
         )
 
+    elif dataset_name == "tiny_imagenet":
+        train_loader, test_loader = get_tiny_imagenet_loaders(
+            batch_size=config["dataset"]["batch_size"],
+            data_dir=config["dataset"]["data_dir"],
+            download=config["dataset"].get("download", False),
+            evaluation_split=config["dataset"].get(
+                "evaluation_split",
+                "development",
+            ),
+            validation_fraction=config["dataset"].get(
+                "validation_fraction",
+                0.1,
+            ),
+            split_seed=config["dataset"].get("split_seed", 42),
+            num_workers=config["dataset"].get("num_workers", 4),
+        )
+
     else:
         raise ValueError(
             f"Unsupported dataset: {dataset_name}"
@@ -256,7 +274,7 @@ def main():
 
         synchronize_device(device)
         test_start = time.perf_counter()
-        test_acc = test(
+        test_acc, test_top5_acc = test(
             model,
             test_loader,
             device
@@ -271,6 +289,7 @@ def main():
             f"Epoch {epoch}: "
             f"Train Acc = {train_acc:.4f}, "
             f"Test Acc = {test_acc:.4f}, "
+            f"Test Top-5 Acc = {test_top5_acc:.4f}, "
             f"LR = {current_lr:.6f}, "
             f"Train Time = {train_seconds:.2f}s, "
             f"Test Time = {test_seconds:.2f}s"
@@ -280,6 +299,7 @@ def main():
             "epoch": epoch,
             "train_acc": train_acc,
             "test_acc": test_acc,
+            "test_top5_acc": test_top5_acc,
             "learning_rate": current_lr,
             "train_seconds": train_seconds,
             "test_seconds": test_seconds,
