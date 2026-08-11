@@ -125,6 +125,152 @@ class ECAAttention(nn.Module):
         return x * self.sigmoid(weights)
 
 
+class SelfAttention2D(nn.Module):
+    """Global self-attention that preserves a BCHW feature-map interface."""
+
+    def __init__(
+        self,
+        channels,
+        num_heads=4,
+        mlp_ratio=2.0,
+        dropout=0.0,
+        attention_dropout=0.0,
+        fusion="residual",
+        gate_init=-2.0,
+        positional_kernel_size=3,
+    ):
+        super().__init__()
+        if channels % num_heads != 0:
+            raise ValueError("channels must be divisible by num_heads")
+        if fusion not in {"direct", "residual", "gated"}:
+            raise ValueError(
+                "fusion must be one of: direct, residual, gated"
+            )
+        if positional_kernel_size <= 0 or positional_kernel_size % 2 == 0:
+            raise ValueError(
+                "positional_kernel_size must be a positive odd number"
+            )
+
+        hidden_dim = int(channels * mlp_ratio)
+        self.fusion = fusion
+        self.position_embedding = nn.Conv2d(
+            channels,
+            channels,
+            kernel_size=positional_kernel_size,
+            padding=positional_kernel_size // 2,
+            groups=channels,
+            bias=False,
+        )
+        self.norm1 = nn.LayerNorm(channels)
+        self.attention = nn.MultiheadAttention(
+            embed_dim=channels,
+            num_heads=num_heads,
+            dropout=attention_dropout,
+            batch_first=True,
+        )
+        self.attention_dropout = nn.Dropout(dropout)
+        self.norm2 = nn.LayerNorm(channels)
+        self.mlp = nn.Sequential(
+            nn.Linear(channels, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, channels),
+            nn.Dropout(dropout),
+        )
+        self.gate = (
+            nn.Parameter(torch.tensor(float(gate_init)))
+            if fusion == "gated"
+            else None
+        )
+
+    def forward(self, x):
+        batch_size, channels, height, width = x.shape
+        positioned = x + self.position_embedding(x)
+        tokens = positioned.flatten(2).transpose(1, 2)
+        normalized = self.norm1(tokens)
+        attended, _ = self.attention(
+            normalized,
+            normalized,
+            normalized,
+            need_weights=False,
+        )
+        attended = self.attention_dropout(attended)
+
+        if self.fusion == "direct":
+            fused = attended
+        elif self.fusion == "gated":
+            fused = tokens + torch.sigmoid(self.gate) * attended
+        else:
+            fused = tokens + attended
+
+        fused = fused + self.mlp(self.norm2(fused))
+        return fused.transpose(1, 2).reshape(
+            batch_size,
+            channels,
+            height,
+            width,
+        )
+
+
+BLOCK_REGISTRY = {
+    "conv": ConvBlock,
+    "residual": ResidualBlock,
+}
+
+
+def build_2d_architecture(architecture, input_channels, activation="relu"):
+    """Build an ordered BCHW architecture from YAML-compatible specs."""
+
+    layers = []
+    current_channels = input_channels
+
+    for index, raw_spec in enumerate(architecture, start=1):
+        spec = dict(raw_spec)
+        try:
+            block_type = spec.pop("type").lower()
+        except KeyError as exc:
+            raise ValueError(
+                f"Architecture block at position {index} has no type"
+            ) from exc
+        out_channels = spec.pop("out_channels", current_channels)
+
+        if block_type in {"eca", "self_attention_2d"}:
+            if out_channels != current_channels:
+                raise ValueError(
+                    f"{block_type} block at position {index} cannot change "
+                    "channel count"
+                )
+            block_class = (
+                ECAAttention if block_type == "eca" else SelfAttention2D
+            )
+            layers.append(block_class(channels=current_channels, **spec))
+            continue
+
+        try:
+            block_class = BLOCK_REGISTRY[block_type]
+        except KeyError as exc:
+            supported = ", ".join(
+                [*BLOCK_REGISTRY, "eca", "self_attention_2d"]
+            )
+            raise ValueError(
+                f"Unsupported architecture block '{block_type}' at position "
+                f"{index}. Choose from: {supported}"
+            ) from exc
+
+        block_activation = spec.pop("activation", activation)
+        layers.append(
+            block_class(
+                in_channels=current_channels,
+                out_channels=out_channels,
+                activation=block_activation,
+                **spec,
+            )
+        )
+        current_channels = out_channels
+
+    return nn.Sequential(*layers), current_channels
+
+
 class CNN(nn.Module):
     """Build a CNN from an ordered list of YAML module specifications."""
 
@@ -145,47 +291,11 @@ class CNN(nn.Module):
                 {"type": "conv", "out_channels": 128, "stride": 2},
             ]
 
-        layers = []
-        current_channels = input_channels
-
-        for index, spec in enumerate(architecture, start=1):
-            spec = dict(spec)
-            block_type = spec.pop("type").lower()
-            out_channels = spec.pop("out_channels", current_channels)
-            block_activation = spec.pop("activation", activation)
-
-            if block_type == "eca":
-                if out_channels != current_channels:
-                    raise ValueError(
-                        f"ECA block at position {index} cannot change channel count"
-                    )
-                layers.append(
-                    ECAAttention(
-                        channels=current_channels,
-                        **spec,
-                    )
-                )
-                continue
-            elif block_type == "conv":
-                block_class = ConvBlock
-            elif block_type == "residual":
-                block_class = ResidualBlock
-            else:
-                raise ValueError(
-                    f"Unsupported architecture block '{block_type}' at position {index}"
-                )
-
-            layers.append(
-                block_class(
-                    in_channels=current_channels,
-                    out_channels=out_channels,
-                    activation=block_activation,
-                    **spec,
-                )
-            )
-            current_channels = out_channels
-
-        self.features = nn.Sequential(*layers)
+        self.features, current_channels = build_2d_architecture(
+            architecture=architecture,
+            input_channels=input_channels,
+            activation=activation,
+        )
         self.pool = nn.AdaptiveAvgPool2d(1)
         self.classifier = nn.Sequential(
             nn.Flatten(),

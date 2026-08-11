@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from models.cnn import ConvBlock, ECAAttention, ResidualBlock
+from models.cnn import build_2d_architecture
 from models.vit import TransformerBlock
 
 
@@ -28,51 +28,17 @@ class CNNViTHybrid(nn.Module):
         if embed_dim % num_heads != 0:
             raise ValueError("embed_dim must be divisible by num_heads")
 
-        cnn_layers = []
-        current_channels = input_channels
         feature_size = image_size
+        for spec in cnn_architecture:
+            if spec.get("type", "").lower() in {"conv", "residual"}:
+                stride = spec.get("stride", 1)
+                feature_size = (feature_size + stride - 1) // stride
 
-        for index, raw_spec in enumerate(cnn_architecture, start=1):
-            spec = dict(raw_spec)
-            block_type = spec.pop("type").lower()
-            out_channels = spec.pop("out_channels", current_channels)
-            block_activation = spec.pop("activation", activation)
-
-            if block_type == "eca":
-                if out_channels != current_channels:
-                    raise ValueError(
-                        f"ECA block at position {index} cannot change channel count"
-                    )
-                cnn_layers.append(
-                    ECAAttention(
-                        channels=current_channels,
-                        **spec,
-                    )
-                )
-                continue
-
-            stride = spec.get("stride", 1)
-            if block_type == "conv":
-                block_class = ConvBlock
-            elif block_type == "residual":
-                block_class = ResidualBlock
-            else:
-                raise ValueError(
-                    f"Unsupported CNN block '{block_type}' at position {index}"
-                )
-
-            cnn_layers.append(
-                block_class(
-                    in_channels=current_channels,
-                    out_channels=out_channels,
-                    activation=block_activation,
-                    **spec,
-                )
-            )
-            current_channels = out_channels
-            feature_size = (feature_size + stride - 1) // stride
-
-        self.cnn_features = nn.Sequential(*cnn_layers)
+        self.cnn_features, current_channels = build_2d_architecture(
+            architecture=cnn_architecture,
+            input_channels=input_channels,
+            activation=activation,
+        )
         self.feature_projection = (
             nn.Identity()
             if current_channels == embed_dim
