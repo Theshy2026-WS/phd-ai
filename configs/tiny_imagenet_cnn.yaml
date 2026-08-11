@@ -45,6 +45,17 @@ training:
   epochs: 25
   learning_rate: 0.001
   weight_decay: 0.0005
+  seed: 42
+  mixed_precision: true
+  amp_dtype: float16
+  enable_tf32: true
+  deterministic: false
+
+profiling:
+  enabled: true
+  inference_batch_size: 64
+  warmup_iterations: 20
+  benchmark_iterations: 100
 
 checkpoint:
   save_dir: checkpoints

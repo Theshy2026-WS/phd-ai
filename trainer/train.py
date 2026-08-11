@@ -2,7 +2,18 @@ import torch
 from tqdm import tqdm
 
 
-def train(model, loader, optimizer, loss_fn, device, epoch):
+def train(
+    model,
+    loader,
+    optimizer,
+    loss_fn,
+    device,
+    epoch,
+    scaler=None,
+    amp_enabled=False,
+    amp_dtype=torch.float16,
+    gradient_clip_norm=None,
+):
     model.train()
 
     total_correct = 0
@@ -15,16 +26,37 @@ def train(model, loader, optimizer, loss_fn, device, epoch):
     )
 
     for x, y in progress_bar:
-        x = x.to(device)
-        y = y.to(device)
+        x = x.to(device, non_blocking=True)
+        y = y.to(device, non_blocking=True)
 
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
 
-        output = model(x)
-        loss = loss_fn(output, y)
+        with torch.autocast(
+            device_type=str(device).split(":")[0],
+            dtype=amp_dtype,
+            enabled=amp_enabled,
+        ):
+            output = model(x)
+            loss = loss_fn(output, y)
 
-        loss.backward()
-        optimizer.step()
+        if scaler is not None and scaler.is_enabled():
+            scaler.scale(loss).backward()
+            if gradient_clip_norm is not None:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(),
+                    gradient_clip_norm,
+                )
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            if gradient_clip_norm is not None:
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(),
+                    gradient_clip_norm,
+                )
+            optimizer.step()
 
         pred = output.argmax(1)
 
@@ -42,7 +74,13 @@ def train(model, loader, optimizer, loss_fn, device, epoch):
     return total_correct / len(loader.dataset)
 
 
-def test(model, loader, device):
+def test(
+    model,
+    loader,
+    device,
+    amp_enabled=False,
+    amp_dtype=torch.float16,
+):
     model.eval()
 
     correct = 0
@@ -57,10 +95,15 @@ def test(model, loader, device):
 
     with torch.no_grad():
         for x, y in progress_bar:
-            x = x.to(device)
-            y = y.to(device)
+            x = x.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
 
-            output = model(x)
+            with torch.autocast(
+                device_type=str(device).split(":")[0],
+                dtype=amp_dtype,
+                enabled=amp_enabled,
+            ):
+                output = model(x)
             pred = output.argmax(1)
             top5_pred = output.topk(
                 min(5, output.size(1)),

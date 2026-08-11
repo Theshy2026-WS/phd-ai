@@ -47,11 +47,22 @@ training:
   learning_rate: 0.0005
   weight_decay: 0.05
   label_smoothing: 0.1
+  seed: 42
+  mixed_precision: true
+  amp_dtype: float16
+  enable_tf32: true
+  deterministic: false
   scheduler:
     name: cosine
     warmup_epochs: 3
     warmup_start_factor: 0.1
     min_lr: 0.00001
+
+profiling:
+  enabled: true
+  inference_batch_size: 64
+  warmup_iterations: 20
+  benchmark_iterations: 100
 
 checkpoint:
   save_dir: checkpoints
