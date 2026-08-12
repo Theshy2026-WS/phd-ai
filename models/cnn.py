@@ -144,9 +144,16 @@ class SelfAttention2D(nn.Module):
         super().__init__()
         if channels % num_heads != 0:
             raise ValueError("channels must be divisible by num_heads")
-        if fusion not in {"direct", "residual", "gated", "dynamic"}:
+        if fusion not in {
+            "direct",
+            "residual",
+            "gated",
+            "dynamic",
+            "dynamic_channel",
+        }:
             raise ValueError(
-                "fusion must be one of: direct, residual, gated, dynamic"
+                "fusion must be one of: direct, residual, gated, dynamic, "
+                "dynamic_channel"
             )
         if dynamic_reduction <= 0:
             raise ValueError("dynamic_reduction must be positive")
@@ -186,8 +193,9 @@ class SelfAttention2D(nn.Module):
             if fusion == "gated"
             else None
         )
-        if fusion == "dynamic":
+        if fusion in {"dynamic", "dynamic_channel"}:
             gate_hidden_dim = max(channels // dynamic_reduction, 16)
+        if fusion == "dynamic":
             self.local_branch = nn.Sequential(
                 nn.Conv2d(
                     channels,
@@ -224,7 +232,29 @@ class SelfAttention2D(nn.Module):
             )
         else:
             self.local_branch = None
-            self.dynamic_gate = None
+            if fusion == "dynamic_channel":
+                self.dynamic_gate = nn.Sequential(
+                    nn.AdaptiveAvgPool2d(1),
+                    nn.Conv2d(
+                        channels,
+                        gate_hidden_dim,
+                        kernel_size=1,
+                    ),
+                    nn.GELU(),
+                    nn.Conv2d(
+                        gate_hidden_dim,
+                        channels,
+                        kernel_size=1,
+                    ),
+                    nn.Sigmoid(),
+                )
+                nn.init.zeros_(self.dynamic_gate[-2].weight)
+                nn.init.constant_(
+                    self.dynamic_gate[-2].bias,
+                    float(dynamic_gate_init),
+                )
+            else:
+                self.dynamic_gate = None
 
     def forward(self, x):
         batch_size, channels, height, width = x.shape
@@ -259,6 +289,10 @@ class SelfAttention2D(nn.Module):
             fused = attended
         elif self.fusion == "gated":
             fused = tokens + torch.sigmoid(self.gate) * attended
+        elif self.fusion == "dynamic_channel":
+            channel_weight = self.dynamic_gate(x)
+            channel_weight = channel_weight.flatten(2).transpose(1, 2)
+            fused = tokens + channel_weight * attended
         else:
             fused = tokens + attended
 
