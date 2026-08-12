@@ -163,6 +163,79 @@ class ConvControlBlock(nn.Module):
         return x + self.block(x)
 
 
+class LocalGlobalCorrectionBlock(nn.Module):
+    """Strong convolutional path plus a zero-init global attention correction."""
+
+    def __init__(
+        self,
+        channels,
+        expansion_ratio=4.0,
+        kernel_size=7,
+        attention_dim=128,
+        num_heads=4,
+        dropout=0.0,
+        attention_dropout=0.0,
+        correction_init=0.0,
+    ):
+        super().__init__()
+        if attention_dim <= 0 or attention_dim % num_heads != 0:
+            raise ValueError(
+                "attention_dim must be positive and divisible by num_heads"
+            )
+
+        self.local_block = ConvControlBlock(
+            channels=channels,
+            expansion_ratio=expansion_ratio,
+            kernel_size=kernel_size,
+            dropout=dropout,
+        )
+        self.position_embedding = nn.Conv2d(
+            channels,
+            channels,
+            kernel_size=3,
+            padding=1,
+            groups=channels,
+            bias=False,
+        )
+        self.input_projection = nn.Linear(channels, attention_dim)
+        self.norm = nn.LayerNorm(attention_dim)
+        self.attention = nn.MultiheadAttention(
+            embed_dim=attention_dim,
+            num_heads=num_heads,
+            dropout=attention_dropout,
+            batch_first=True,
+        )
+        self.output_projection = nn.Sequential(
+            nn.Linear(attention_dim, channels),
+            nn.Dropout(dropout),
+        )
+        self.correction_scale = nn.Parameter(
+            torch.tensor(float(correction_init))
+        )
+
+    def forward(self, x):
+        local_features = self.local_block(x)
+        positioned = local_features + self.position_embedding(local_features)
+        batch_size, channels, height, width = positioned.shape
+        tokens = positioned.flatten(2).transpose(1, 2)
+        tokens = self.input_projection(tokens)
+        normalized = self.norm(tokens)
+        attended, _ = self.attention(
+            normalized,
+            normalized,
+            normalized,
+            need_weights=False,
+        )
+        correction = self.output_projection(attended)
+        correction = correction.transpose(1, 2).reshape(
+            batch_size,
+            channels,
+            height,
+            width,
+        )
+        return local_features + self.correction_scale * correction
+
+
 class SelfAttention2D(nn.Module):
     """Global self-attention that preserves a BCHW feature-map interface."""
 
@@ -365,7 +438,12 @@ def build_2d_architecture(architecture, input_channels, activation="relu"):
             ) from exc
         out_channels = spec.pop("out_channels", current_channels)
 
-        if block_type in {"eca", "self_attention_2d", "conv_control"}:
+        if block_type in {
+            "eca",
+            "self_attention_2d",
+            "conv_control",
+            "local_global_correction",
+        }:
             if out_channels != current_channels:
                 raise ValueError(
                     f"{block_type} block at position {index} cannot change "
@@ -375,6 +453,7 @@ def build_2d_architecture(architecture, input_channels, activation="relu"):
                 "eca": ECAAttention,
                 "self_attention_2d": SelfAttention2D,
                 "conv_control": ConvControlBlock,
+                "local_global_correction": LocalGlobalCorrectionBlock,
             }
             block_class = block_classes[block_type]
             layers.append(block_class(channels=current_channels, **spec))
@@ -389,6 +468,7 @@ def build_2d_architecture(architecture, input_channels, activation="relu"):
                     "eca",
                     "self_attention_2d",
                     "conv_control",
+                    "local_global_correction",
                 ]
             )
             raise ValueError(

@@ -137,6 +137,41 @@ Run:
 python main.py tiny_imagenet_late_conv_control.yaml
 ```
 
+Result:
+
+| Model | Top-1 | Top-5 | Train time | Throughput |
+|---|---:|---:|---:|---:|
+| Late residual attention | 37.15% | 65.13% | 250.42 s | 7101.57 img/s |
+| Late convolutional control | **39.53%** | **67.56%** | **242.53 s** | **7595.34 img/s** |
+
+The convolutional control was 2.38 Top-1 points better and faster than Late
+attention. Therefore, the earlier Late attention gain cannot be attributed to
+global attention alone. The strong local convolutional block becomes the new
+5-epoch baseline.
+
+## Current experiment: local-global correction
+
+This experiment preserves the full convolutional control path and adds a
+reduced-dimension global attention correction:
+
+```text
+L = ConvControl(x)
+G = ProjectOut(SelfAttention(ProjectIn(L)))
+y = L + alpha * G
+```
+
+`alpha` is a learnable scalar initialized to zero, so the initial forward pass
+is exactly the convolutional control. Attention uses dimension 128 rather than
+256 to limit its parameter, FLOP, and latency overhead. This tests whether
+global information can improve the strong local baseline as a learned residual
+correction instead of competing with it.
+
+Run:
+
+```bash
+python main.py tiny_imagenet_late_local_global_correction.yaml
+```
+
 ## Experiment policy
 
 - Use 5 epochs only for smoke tests and candidate screening.
@@ -150,10 +185,10 @@ python main.py tiny_imagenet_late_conv_control.yaml
 
 ## Next decisions
 
-1. Compare the parameter-matched CNN control with CNN and Late Residual.
+1. Compare Local-Global Correction with the Late convolutional control.
 2. Record exact parameters and FLOPs from both summary CSV files.
-3. If Late Residual retains a meaningful advantage, repeat leading candidates
-   with multiple seeds.
+3. If the correction is competitive, inspect the learned `correction_scale`
+   from its checkpoint and repeat leading candidates with multiple seeds.
 4. Train only the shortlisted models for a longer, common epoch budget.
 5. Validate the final method on CIFAR-100, Tiny ImageNet, and one real-world
    dataset.
