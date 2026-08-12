@@ -125,6 +125,44 @@ class ECAAttention(nn.Module):
         return x * self.sigmoid(weights)
 
 
+class ConvControlBlock(nn.Module):
+    """Parameter-matched convolutional control for an attention block."""
+
+    def __init__(
+        self,
+        channels,
+        expansion_ratio=4.0,
+        kernel_size=7,
+        dropout=0.0,
+    ):
+        super().__init__()
+        if kernel_size <= 0 or kernel_size % 2 == 0:
+            raise ValueError("kernel_size must be a positive odd number")
+        if expansion_ratio <= 0:
+            raise ValueError("expansion_ratio must be positive")
+
+        hidden_channels = int(channels * expansion_ratio)
+        self.block = nn.Sequential(
+            nn.Conv2d(
+                channels,
+                channels,
+                kernel_size=kernel_size,
+                padding=kernel_size // 2,
+                groups=channels,
+                bias=False,
+            ),
+            nn.BatchNorm2d(channels),
+            nn.Conv2d(channels, hidden_channels, kernel_size=1),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Conv2d(hidden_channels, channels, kernel_size=1),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x):
+        return x + self.block(x)
+
+
 class SelfAttention2D(nn.Module):
     """Global self-attention that preserves a BCHW feature-map interface."""
 
@@ -327,15 +365,18 @@ def build_2d_architecture(architecture, input_channels, activation="relu"):
             ) from exc
         out_channels = spec.pop("out_channels", current_channels)
 
-        if block_type in {"eca", "self_attention_2d"}:
+        if block_type in {"eca", "self_attention_2d", "conv_control"}:
             if out_channels != current_channels:
                 raise ValueError(
                     f"{block_type} block at position {index} cannot change "
                     "channel count"
                 )
-            block_class = (
-                ECAAttention if block_type == "eca" else SelfAttention2D
-            )
+            block_classes = {
+                "eca": ECAAttention,
+                "self_attention_2d": SelfAttention2D,
+                "conv_control": ConvControlBlock,
+            }
+            block_class = block_classes[block_type]
             layers.append(block_class(channels=current_channels, **spec))
             continue
 
@@ -343,7 +384,12 @@ def build_2d_architecture(architecture, input_channels, activation="relu"):
             block_class = BLOCK_REGISTRY[block_type]
         except KeyError as exc:
             supported = ", ".join(
-                [*BLOCK_REGISTRY, "eca", "self_attention_2d"]
+                [
+                    *BLOCK_REGISTRY,
+                    "eca",
+                    "self_attention_2d",
+                    "conv_control",
+                ]
             )
             raise ValueError(
                 f"Unsupported architecture block '{block_type}' at position "

@@ -84,6 +84,8 @@ not improve Top-1.
 | Residual | 37.15% | **65.13%** | 250.42 s | 7101.57 img/s |
 | Scalar gated | **37.17%** | 64.81% | 247.28 s | 7034.61 img/s |
 | Two-branch dynamic | 34.78% | 63.06% | 266.40 s | 6779.40 img/s |
+| Dynamic channel, init -2 | 34.61% | 62.92% | 253.05 s | 6990.13 img/s |
+| Dynamic channel, init +2 | 35.38% | 63.28% | 254.31 s | 6929.05 img/s |
 
 Interpretation:
 
@@ -93,8 +95,11 @@ Interpretation:
   local branch and gate simultaneously, and mixed BatchNorm and LayerNorm
   feature distributions, so it is retained as a negative result rather than a
   candidate for longer training.
+- Increasing the Dynamic Channel initial attention weight from about 0.119 to
+  0.881 improved Top-1 by 0.77 points, but it remained 1.77 points below fixed
+  Residual. Gate initialization tuning is therefore stopped.
 
-## Current experiment: Dynamic Channel fusion
+## Dynamic Channel fusion
 
 The new, controlled design keeps the proven Late residual structure and changes
 only the attention coefficient:
@@ -107,14 +112,29 @@ y = y + MLP(LayerNorm(y))
 ```
 
 `w` has shape `[batch, channels, 1, 1]`, so it varies by image and channel.
-There is no additional local CNN branch. The final gate layer starts with zero
-weights and bias -2, giving an initial attention weight near 0.119, consistent
-with the stable scalar-gated experiment.
+There is no additional local CNN branch. Both initial gate biases -2 and +2
+were screened. Neither exceeded fixed Residual in the 5-epoch experiment.
+
+## Current experiment: parameter-matched CNN control
+
+The control replaces the Late attention block with a residual ConvNeXt-style
+convolutional block:
+
+```text
+x -> depthwise 7x7 -> BN -> pointwise expansion -> GELU
+  -> pointwise projection -> residual add
+```
+
+At 256 channels and expansion ratio 4, its learnable parameter count is close
+to the removed Late attention-plus-MLP block. FLOPs cannot be exactly matched
+because global attention contains a parameter-free token-interaction term; the
+recorded parameter and FLOP values in the summary CSV must therefore be used in
+the interpretation.
 
 Run:
 
 ```bash
-python main.py tiny_imagenet_attention_late_dynamic_channel.yaml
+python main.py tiny_imagenet_late_conv_control.yaml
 ```
 
 ## Experiment policy
@@ -130,10 +150,10 @@ python main.py tiny_imagenet_attention_late_dynamic_channel.yaml
 
 ## Next decisions
 
-1. Compare Dynamic Channel against Late Residual and scalar Gated at 5 epochs.
-2. If it is competitive, repeat the leading candidates with multiple seeds.
-3. Add a parameter/FLOP-matched CNN control before attributing gains solely to
-   attention or fusion.
+1. Compare the parameter-matched CNN control with CNN and Late Residual.
+2. Record exact parameters and FLOPs from both summary CSV files.
+3. If Late Residual retains a meaningful advantage, repeat leading candidates
+   with multiple seeds.
 4. Train only the shortlisted models for a longer, common epoch budget.
 5. Validate the final method on CIFAR-100, Tiny ImageNet, and one real-world
    dataset.

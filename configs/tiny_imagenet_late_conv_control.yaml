@@ -1,0 +1,66 @@
+experiment_name: tiny_imagenet_late_conv_control
+
+dataset:
+  name: tiny_imagenet
+  batch_size: 64
+  data_dir: ./data
+  download: true
+  image_size: 64
+  input_channels: 3
+  num_classes: 200
+  evaluation_split: development
+  validation_fraction: 0.1
+  split_seed: 42
+  num_workers: 4
+
+model:
+  name: cnn
+  activation: relu
+  dropout: 0.2
+  architecture:
+    - type: conv
+      out_channels: 64
+      kernel_size: 3
+      stride: 1
+    - type: residual
+      out_channels: 64
+      kernel_size: 3
+      stride: 1
+    - type: residual
+      out_channels: 128
+      kernel_size: 3
+      stride: 2
+    - type: residual
+      out_channels: 256
+      kernel_size: 3
+      stride: 2
+    - type: residual
+      out_channels: 256
+      kernel_size: 3
+      stride: 1
+    - type: conv_control
+      expansion_ratio: 4.0
+      kernel_size: 7
+      dropout: 0.1
+    - type: eca
+      kernel_size: 3
+
+training:
+  epochs: 5
+  learning_rate: 0.001
+  weight_decay: 0.0005
+  seed: 42
+  mixed_precision: true
+  amp_dtype: float16
+  enable_tf32: true
+  deterministic: false
+
+profiling:
+  enabled: true
+  inference_batch_size: 64
+  warmup_iterations: 20
+  benchmark_iterations: 100
+
+checkpoint:
+  save_dir: checkpoints
+  save_best: true
