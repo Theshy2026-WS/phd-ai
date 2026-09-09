@@ -1,0 +1,26 @@
+# All three variants use this one effective configuration.
+dataset:
+  data_dir: ./data
+  download: true
+  split_seed: 42
+  batch_size: 64
+  num_workers: 4
+training:
+  epochs: 25
+  learning_rate: 0.001
+  weight_decay: 0.01
+  label_smoothing: 0.1
+  mixed_precision: true
+  amp_dtype: float16
+  enable_tf32: true
+  deterministic: false
+  scheduler:
+    name: cosine
+    warmup_epochs: 1
+    min_lr: 0.00001
+audit:
+  # Fractions of image area; centered square, same pixels for all models.
+  occlusion: [0.0, 0.1, 0.25]
+profiling:
+  warmup_iterations: 10
+  benchmark_iterations: 50

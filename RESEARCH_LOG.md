@@ -1,6 +1,20 @@
 # Research Progress Log
 
-Last updated: 2026-08-12
+Last updated: 2026-09-09
+
+## 2026-09-09: controlled utility protocol
+
+See `UTILITY_AUDIT.md` for the executable protocol. The new experiment uses timm
+RepViT-M0.9, from scratch, plus either a matched-shell convolution addon or fixed
+single-head MHSA after the penultimate stage. It is not the old self-built CNN,
+nor an implementation of SHViT SHSA. Training/selection/audit are stratified
+80/10/10 partitions, with official validation reserved. Historical numbers below
+remain exploratory and are not directly comparable to the new protocol.
+
+The first audit exports paired predictions, loss/margin utility, correction/harm
+counts, uncertainty bins, calibration and controlled occlusion. New fusion design,
+representation-level claims and conditional execution await repeatable evidence.
+No Tiny ImageNet results from this new protocol are available yet.
 
 ## Research objective
 
