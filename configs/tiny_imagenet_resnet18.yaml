@@ -1,0 +1,39 @@
+# Two models only: small-image ResNet-18 and the same trunk + late self-attention.
+dataset:
+  data_dir: ./data
+  download: true
+  split_seed: 42
+  batch_size: 64
+  num_workers: 4
+model:
+  attention_heads: 4
+  attention_residual_scale: 0.1  # fixed, not a learned gate
+augmentation:
+  crop_scale: [0.6, 1.0]
+  randaugment_ops: 2
+  randaugment_magnitude: 5
+training:
+  epochs: 100
+  learning_rate: 0.05
+  momentum: 0.9
+  weight_decay: 0.0005
+  label_smoothing: 0.1
+  mixup_alpha: 0.2
+  cutmix_alpha: 1.0
+  mix_probability: 0.5
+  gradient_clip_norm: 5.0
+  mixed_precision: true
+  amp_dtype: float16
+  enable_tf32: true
+  deterministic: false
+  probe_per_class: 10  # 2000 clean train images, no augmentation or mixed labels
+  probe_every: 5
+  scheduler:
+    name: cosine
+    warmup_epochs: 5
+    min_lr: 0.00001
+audit:
+  occlusion: [0.0, 0.1, 0.25]
+profiling:
+  warmup_iterations: 10
+  benchmark_iterations: 50

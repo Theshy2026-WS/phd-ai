@@ -2,6 +2,27 @@
 
 Last updated: 2026-10-06
 
+## 2026-10-06: new ResNet-18 generalization check (not yet trained on real data)
+
+The next question is whether a better-controlled, regularized ResNet-18 baseline
+benefits from a single late self-attention layer. Per the research decision, this
+is **only ResNet-18 vs ResNet-18 + attention**, with no added Conv Control/FFN or
+new fusion proposal. Historical RepViT experiments remain unchanged.
+
+- New entry point: `resnet_experiment.py`; protocol and commands:
+  [RESNET18_AUDIT.md](RESNET18_AUDIT.md).
+- Small-image stem (3x3 stride 1, no initial max-pool); late attention at 8x8,
+  64 tokens, 512 channels, four heads, fixed residual scale 0.1.
+- Same stratified 80/10/10 split, shared initialization and training recipe.
+  SGD, 100 epochs, warmup/cosine, crop/flip/RandAugment, Mixup/CutMix and smoothing.
+- A fixed clean training probe tracks accuracy/NLL against selection data; mixed
+  labels are not used to report a misleading training accuracy.
+- Epoch-boundary resume, parameters/FLOPs/timing/memory/inference metadata and
+  two-model paired audit included. No real dataset downloaded locally.
+- First run the baseline, assess learning curves, then reuse it for the attention
+  comparison under an unchanged recipe. Do not infer that larger models or
+  regularization guarantee a gain. Single-seed findings remain preliminary.
+
 ## 2026-10-06: first 25-epoch controlled run and frozen-checkpoint diagnostics
 
 Seed 42 completed on L4, with split fingerprint

@@ -1,5 +1,9 @@
 # Tiny ImageNet: controlled baseline and attention utility audit
 
+For the new two-model ResNet-18 experiment, see
+[RESNET18_AUDIT.md](RESNET18_AUDIT.md). This document continues to describe the
+historical RepViT protocol; its commands and results are preserved.
+
 This protocol supersedes the exploratory 5-epoch gate sweep for new comparisons.
 It does not alter the old `main.py` experiments. No proposed fusion is introduced.
 
