@@ -140,3 +140,59 @@ python -m unittest discover -s tests -v
 
 Tests use synthetic images to verify common initialization, gradients, addon shape,
 augmentation isolation, sample matching, utility signs and full train/audit outputs.
+
+## Saved-run diagnostics (no retraining)
+
+Names in the runner refer to **CNN-only**, **CNN + extra convolution**, and
+**CNN + late self-attention**. There is no pure ViT in this three-way audit.
+
+Analyze an existing paired file on CPU:
+
+```bash
+python utility_diagnostics.py paired --paired runs/tiny_utility/AUDIT_RUN/paired_utility.csv
+```
+
+This writes pairwise comparisons including CNN-versus-conv, fixed entropy-bin
+accuracy/correction/harm counts, and uncertainty-signal AUCs. The AUC population
+includes only samples on which exactly one model is correct. This uses ground-truth
+labels for analysis and is NOT end-to-end routing accuracy or a validated predictor.
+No thresholds are fitted. Compare to the conv control: a signal may predict ordinary
+reference-model mistakes rather than attention-specific utility. These are single-run
+descriptive associations, with no claim of seed-level reproducibility or causality.
+
+Check trained modules on Workbench, where the original run directories and dataset
+still exist:
+
+```bash
+python utility_diagnostics.py checkpoint --audit-dir runs/tiny_utility/AUDIT_RUN
+```
+
+Replace `AUDIT_RUN` with the directory printed by the original audit. This command
+uses its provenance to locate the **same** conv and attention `best.pt` files and
+checks checkpoint hashes, timm version, dataset fingerprint and sample pairing.
+It does not download data, train, or write checkpoint weights. Other Torch/runtime
+versions are recorded; the full-model replay is checked against original predictions.
+Use trusted locally produced checkpoints, as in the training/audit runner.
+
+For both models, it evaluates all original occlusion conditions with:
+
+- `full`: unchanged checkpoint.
+- `mixer_off`: zero the spatial mixer's output, keeping positional convolution,
+  residual connection, normalization and FFN.
+- `addon_off`: bypass the complete added module.
+
+Outputs go into a new `runs/tiny_utility/checkpoint_diagnostic_seed...` directory:
+
+- `replay_check.csv`: normal-forward prediction mismatch counts and NLL differences
+  from the original audit. Inspect this first; nontrivial mismatches require diagnosis.
+- `intervention_summary.csv`: paired accuracy/NLL changes, corrected/harmed counts,
+  prediction flips and probability changes under each intervention.
+- `parameter_updates.csv`: initial/trained/change L2 norms per addon parameter,
+  comparing to the seeded initialization. Changed weights alone do not establish benefit.
+- Per-sample intervention CSVs and provenance for follow-up analysis.
+
+Removing a trained component may shift downstream feature distributions. A loss of
+accuracy establishes frozen-model sensitivity, not unique global reasoning, causal
+mechanistic identification, or superiority over a separately retrained CNN. Moreover,
+these hooks compute and discard outputs: intervention timing is **not** a conditional
+execution speed benchmark. No new architecture is selected by this diagnostic alone.

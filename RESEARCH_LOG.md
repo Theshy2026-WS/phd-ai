@@ -1,6 +1,48 @@
 # Research Progress Log
 
-Last updated: 2026-09-09
+Last updated: 2026-10-06
+
+## 2026-10-06: first 25-epoch controlled run and frozen-checkpoint diagnostics
+
+Seed 42 completed on L4, with split fingerprint
+`cdebb937661395d535e1ed07bf8898d44062f63359eecc50422f4311402cc26d`.
+Training commit: `e7a83a7`; recorded dirty working tree contained historical
+configuration/results changes. The three variants share a RepViT trunk architecture;
+`attention` is a hybrid, not a pure ViT. All best-selection checkpoints are epoch 16.
+
+| Variant | Best selection accuracy | Clean audit accuracy | Clean audit NLL |
+| --- | ---: | ---: | ---: |
+| CNN | 0.4212 | 0.4125 | 2.68977 |
+| CNN + Conv Control | 0.4102 | 0.4058 | 2.71008 |
+| CNN + Attention | 0.4107 | 0.4139 | 2.66411 |
+
+Final training accuracies are 0.93866/0.95453/0.93875; selection NLL bottoms
+around epochs 11-12 then rises. This is evidence of overfitting under this recipe,
+not evidence that extending unchanged training will help. The official validation
+set remains reserved. Audit now informs exploratory development, not final testing.
+
+On 10000 clean audit images, attention corrects 941 CNN mistakes but harms 927
+correct CNN predictions. Extra conv corrects 916 and harms 983. Label-informed oracle
+accuracies are 0.5066 (CNN/attention) and 0.5041 (CNN/conv), so error diversity is
+not yet evidence of attention-specific complementarity.
+
+For label-defined corrected-versus-harmed samples only, CNN entropy gives AUC
+0.58496 for attention and 0.58195 for conv; negative top-two probability margin gives
+0.62321 and 0.63417. These are exploratory ranking associations, not learned-router
+performance, significance tests or seed-replicated conclusions. In clean entropy
+bins, more uncertain CNN samples show larger relative top-1 gains for both added
+modules. Conditioning on reference-model uncertainty can itself expose ordinary
+model diversity. NLL utility and accuracy gains must be examined separately.
+
+The next executable step is `utility_diagnostics.py checkpoint`: replay the saved
+conv/attention models, then remove just the mixer or the entire addon without
+retraining. It checks replay, parameter changes and frozen-model sensitivity. It
+does not establish a deployable skip policy or prove unique global-information use.
+No new fusion mechanism or training-recipe change has been implemented in this step.
+
+Sources: user-provided renamed `cnn_epochs.csv`, `cpnv_epochs.csv`, `att_epochs.csv`,
+the three corresponding summaries, and `audit_seed42_4dc7bb76` paired predictions
+and provenance. Data/checkpoints are not committed. See `UTILITY_AUDIT.md` for commands.
 
 ## 2026-09-09: controlled utility protocol
 
@@ -14,7 +56,8 @@ remain exploratory and are not directly comparable to the new protocol.
 The first audit exports paired predictions, loss/margin utility, correction/harm
 counts, uncertainty bins, calibration and controlled occlusion. New fusion design,
 representation-level claims and conditional execution await repeatable evidence.
-No Tiny ImageNet results from this new protocol are available yet.
+At the time of that implementation, no Tiny ImageNet results from this protocol
+were available; the first completed run is recorded in the October entry above.
 
 ## Research objective
 

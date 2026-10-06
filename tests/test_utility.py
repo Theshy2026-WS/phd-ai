@@ -10,6 +10,7 @@ from torchvision.datasets import ImageFolder
 from models.audit_repvit import AuditRepViT
 from datasets.utility_tiny import UtilityDataset, loader
 from utility_experiment import sample_metrics, pair_predictions, occlude, train, audit
+from utility_diagnostics import intervention, checkpoint_diagnostic, paired_tables, auc_rank
 
 
 class UtilityTests(unittest.TestCase):
@@ -33,7 +34,27 @@ class UtilityTests(unittest.TestCase):
             self.assertEqual(tuple(seen[0]),(2,192,4,4))
             output.square().mean().backward()
             self.assertTrue(any(p.grad is not None and p.grad.abs().sum()>0 for p in model.addon.parameters()))
+            if variant == 'attention':
+                self.assertGreater(model.addon.mixer.in_proj_weight.grad.abs().sum().item(), 0)
             states.append(model.addon.state_dict())
+            model.eval()
+            x = torch.randn(2,3,64,64)
+            before = {k:v.clone() for k,v in model.state_dict().items()}
+            with torch.no_grad():
+                full = model(x)
+                with intervention(model, 'mixer_off'):
+                    off = model(x)
+                self.assertFalse(torch.equal(full, off))
+                with intervention(model, 'addon_off'):
+                    bypass = model(x)
+                expected = model.backbone.stem(x)
+                for stage in model.backbone.stages:
+                    expected = stage(expected)
+                expected = model.backbone.forward_head(expected)
+                torch.testing.assert_close(bypass, expected)
+                torch.testing.assert_close(model(x), full, rtol=0, atol=0)
+            for k,v in model.state_dict().items():
+                self.assertTrue(torch.equal(v,before[k]),k)
         for k in states[0]:
             if not k.startswith('mixer.'):
                 self.assertTrue(torch.equal(states[0][k],states[1][k]),k)
@@ -73,7 +94,15 @@ class UtilityTests(unittest.TestCase):
                 for variant in ('cnn','conv','attention'):
                     runs[variant]=str(train(argparse.Namespace(config=str(path),variant=variant,
                         seed=42,epochs=1,output=str(root/'runs'))))
-                audit(argparse.Namespace(**runs,output=str(root/'audits')))
+                audit_dir = audit(argparse.Namespace(**runs,output=str(root/'audits')))
+            with patch('datasets.utility_tiny.make_datasets', fake_data):
+                diagnostic = checkpoint_diagnostic(argparse.Namespace(
+                    audit_dir=str(audit_dir), output=str(root/'diagnostics')))
+            replay = pd.read_csv(diagnostic/'replay_check.csv')
+            self.assertEqual(replay.prediction_mismatches.sum(), 0)
+            self.assertLess(replay.max_abs_nll_change.max(), 1e-5)
+            summary = pd.read_csv(diagnostic/'intervention_summary.csv')
+            self.assertEqual(len(summary), 18)
             paired=pd.read_csv(next((root/'audits').glob('*/paired_utility.csv')))
             self.assertEqual(len(paired),6)
             self.assertTrue(paired.utility_vs_conv.notna().all())
@@ -85,6 +114,25 @@ class UtilityTests(unittest.TestCase):
             torch.rand(100)
             b=[ids for _,_,ids in loader(ds,{'batch_size':2,'num_workers':0},42)]
             self.assertEqual(a,b)
+
+    def test_diagnostic_pair_counts_and_auc(self):
+        frame = pd.DataFrame(dict(sample_id=['a','b','c','d'], target=[0]*4, occlusion=[0.]*4))
+        for name, pred in [('cnn',[0,0,1,1]),('conv',[0,1,0,1]),('attention',[1,0,0,0])]:
+            frame[name+'_pred'] = pred
+            frame[name+'_correct'] = frame[name+'_pred'].eq(0)
+            frame[name+'_nll'] = [1.,2.,3.,4.]
+            frame[name+'_entropy'] = [0.5,1.5,2.5,3.5]
+            frame[name+'_confidence'] = [0.9,0.7,0.5,0.3]
+            frame[name+'_uncertainty_margin'] = [0.8,0.6,0.4,0.2]
+        pairs, bins, signals = paired_tables(frame)
+        row = pairs.iloc[0]
+        self.assertEqual((row.corrected,row.harmed,row.oracle_accuracy),(2,1,1.))
+        self.assertEqual(len(pairs),3)
+        self.assertEqual(auc_rank([0,1],[1.,1.]),0.5)
+        self.assertEqual(auc_rank([0,1],[0.,1.]),1.)
+        self.assertTrue(pd.isna(auc_rank([1,1],[0.,1.])))
+        with self.assertRaises(ValueError):
+            paired_tables(pd.concat([frame,frame.iloc[:1]]))
 
 
 if __name__ == '__main__':
