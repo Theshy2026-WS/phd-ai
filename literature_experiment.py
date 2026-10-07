@@ -27,6 +27,7 @@ from resnet_experiment import train_epoch, atomic_save
 from utility_experiment import runtime, sync
 from utils.profiling import benchmark_inference
 from utils.literature_profiling import estimate_flops
+from utils.literature_legacy import is_legacy_source
 
 ROOT = Path(__file__).resolve().parent
 PROTOCOL = 'tiny-literature-v1-80-10-10'
@@ -45,7 +46,7 @@ def source_hashes():
              'models/literature_alternet.py', 'utils/literature_profiling.py',
              'resnet_experiment.py', 'datasets/resnet_tiny.py', 'datasets/utility_tiny.py',
              'datasets/tiny_imagenet.py', 'main.py', 'utility_experiment.py',
-             'utils/profiling.py', 'requirements-literature.txt']
+             'utils/profiling.py', 'requirements-literature.txt', 'utils/literature_legacy.py']
     return {p: hashlib.sha256((ROOT/p).read_bytes()).hexdigest() for p in paths}
 
 
@@ -89,7 +90,14 @@ def evaluate(model, batches, device, amp, dtype):
         logits = logits.float()
         nll = torch.nn.functional.cross_entropy(logits, y, reduction='sum')
         if not torch.isfinite(nll):
-            raise RuntimeError('Non-finite evaluation loss')
+            bad_state = [name for name, value in model.state_dict().items()
+                         if value.is_floating_point() and not torch.isfinite(value).all()]
+            with torch.autocast(device, enabled=False):
+                fp32_finite = bool(torch.isfinite(model(x.float())).all())
+            raise RuntimeError('Non-finite evaluation loss; '
+                               f'nonfinite state tensors={bad_state[:8]}; '
+                               f'same-batch FP32 logits finite={fp32_finite}. '
+                               'No checkpoint is saved for this epoch.')
         loss += nll.item()
         correct += (logits.argmax(1) == y).sum().item()
         top5 += (logits.topk(5, dim=1).indices == y[:, None]).any(1).sum().item()
@@ -236,6 +244,16 @@ def train_run(config, variant, seed, run, resume=False, deadline=None):
     return True
 
 
+def comparable_source(summary):
+    hashes = summary['source_hashes']
+    # The precision repair does not alter CNN forward/training or its recipe.
+    # Preserve the original provenance; never rewrite an old run as current.
+    if (summary['variant'] in ('resnet50', 'preact50')
+            and is_legacy_source(hashes)):
+        return source_hashes()
+    return hashes
+
+
 def compare(runs, output):
     summaries = [(Path(r), json.loads((Path(r)/'summary.json').read_text())) for r in runs]
     if not summaries:
@@ -243,9 +261,11 @@ def compare(runs, output):
     for _, s in summaries:
         if s['protocol'] != PROTOCOL:
             raise ValueError('Wrong experiment protocol')
-        for key in ('split_hash', 'recipe_hash', 'source_hashes', 'environment', 'completed_epochs'):
+        for key in ('split_hash', 'recipe_hash', 'environment', 'completed_epochs'):
             if s[key] != summaries[0][1][key]:
                 raise ValueError(f'Incompatible runs: {key}')
+        if comparable_source(s) != comparable_source(summaries[0][1]):
+            raise ValueError('Incompatible runs: source_hashes')
     pairs = [(s['variant'], s['seed']) for _, s in summaries]
     if len(set(pairs)) != len(pairs):
         raise ValueError('Only one run per variant/seed may be compared')
@@ -264,7 +284,10 @@ def compare(runs, output):
                          experiment_minutes=s['total_experiment_seconds']/60,
                          latency_batch1_ms=s['inference']['1']['latency_per_batch_ms'],
                          throughput_images_per_second=s['inference'][str(s['inference_batch_size'])]['throughput_images_per_second'],
-                         throughput_batch_size=s['inference_batch_size'], run=str(run.resolve())))
+                         throughput_batch_size=s['inference_batch_size'],
+                         git_commit=s['git_commit'],
+                         attention_precision=s['architecture'].get('attention_precision', 'outer autocast'),
+                         reused_legacy_cnn=is_legacy_source(s['source_hashes']), run=str(run.resolve())))
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     frame = pd.DataFrame(rows)
@@ -273,11 +296,64 @@ def compare(runs, output):
     print(f'Comparison saved: {output}', flush=True)
 
 
+def repair_suite(args, deadline):
+    """New suite, preserved old files; reuse only completed, verified CNN controls."""
+    original = Path(args.from_suite).resolve()
+    old = json.loads((original/'suite.json').read_text())
+    if not is_legacy_source(old['source_hashes']):
+        raise ValueError('Repair only supports the exact ff14146 source snapshot; no unknown edits')
+    jobs = []
+    for job in old['jobs']:
+        if job['variant'] not in VARIANTS:
+            raise ValueError('Unknown variant in original suite')
+        run = (original/job['directory']).resolve()
+        if not run.is_relative_to(original):
+            raise ValueError('Original run must be inside its suite directory')
+        updated = dict(job, directory=f'{job["variant"]}_seed{job["seed"]}')
+        if job['variant'] in ('resnet50', 'preact50') and (run/'summary.json').exists():
+            summary = json.loads((run/'summary.json').read_text())
+            if (summary['protocol'] != PROTOCOL or not is_legacy_source(summary['source_hashes'])
+                    or summary['variant'] != job['variant'] or summary['seed'] != job['seed']
+                    or summary['recipe_hash'] != recipe_hash(old['config'])
+                    or summary['completed_epochs'] != old['config']['training']['epochs']):
+                raise ValueError(f'Incompatible CNN result: {run}')
+            updated['reuse_run'] = str(run)
+        jobs.append(updated)
+    if not jobs:
+        raise ValueError('Original suite has no jobs')
+    if len({(j['variant'], j['seed']) for j in jobs}) != len(jobs):
+        raise ValueError('Duplicate jobs in original suite')
+    # Reject environment/split changes before spending time training the next model.
+    device, amp, dtype, _ = runtime(copy.deepcopy(old['config']), jobs[0]['seed'])
+    _, _, fingerprint = prepare_datasets(old['config'], jobs[0]['seed'])
+    for job in jobs:
+        if 'reuse_run' in job:
+            summary = json.loads((Path(job['reuse_run'])/'summary.json').read_text())
+            if summary['environment'] != environment(device, amp, dtype) or summary['split_hash'] != fingerprint:
+                raise ValueError('Reusing CNN requires its original environment and dataset split')
+    suite = Path(args.output)/new_name('suite_fp32fix')
+    suite.mkdir(parents=True, exist_ok=False)
+    save_json(suite/'suite.json', dict(config=old['config'], source_hashes=source_hashes(), jobs=jobs,
+              repair=dict(original_suite=str(original), original_source_hashes=old['source_hashes'],
+                          note='Reuse verified completed CNNs unchanged; restart attention models from epoch 1 with precision fix')))
+    for job in jobs:
+        print(f'{job["variant"]}: ' + (f'reuse {job["reuse_run"]}' if 'reuse_run' in job else 'restart from epoch 1'), flush=True)
+    args.resume, args.epochs = str(suite), None
+    run_suite(args, deadline)
+
+
+def job_path(suite, job):
+    return Path(job['reuse_run']) if 'reuse_run' in job else suite/job['directory']
+
+
 def run_suite(args, deadline):
     if args.resume:
         suite = Path(args.resume)
         plan = json.loads((suite/'suite.json').read_text())
         if plan['source_hashes'] != source_hashes():
+            if is_legacy_source(plan['source_hashes']):
+                raise ValueError('Old precision version: use repair-suite --from-suite '
+                                 f'"{suite}" to preserve CNN results and restart attention safely')
             raise ValueError('Source changed since suite creation')
         if args.epochs is not None and args.epochs != plan['config']['training']['epochs']:
             raise ValueError('Resume cannot change the original epoch schedule')
@@ -290,24 +366,26 @@ def run_suite(args, deadline):
         save_json(suite/'suite.json', plan)
     print(f'Suite: {suite}', flush=True)
     for job in plan['jobs']:
-        run = suite/job['directory']
+        run = job_path(suite, job)
+        if 'reuse_run' in job and not (run/'summary.json').exists():
+            raise ValueError(f'Reused CNN was moved or removed: {run}')
         if (run/'summary.json').exists():
             continue
         if deadline is not None and time.perf_counter() >= deadline:
             break
         complete = train_run(plan['config'], job['variant'], job['seed'], run,
                              resume=(run/'last.pt').exists(), deadline=deadline)
-        completed = [suite/j['directory'] for j in plan['jobs']
-                     if (suite/j['directory']/'summary.json').exists()]
+        completed = [job_path(suite, j) for j in plan['jobs']
+                     if (job_path(suite, j)/'summary.json').exists()]
         compare(completed, suite/'comparison.csv')
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         if not complete:
             break
-    done = sum((suite/j['directory']/'summary.json').exists() for j in plan['jobs'])
-    compare([suite/j['directory'] for j in plan['jobs']
-             if (suite/j['directory']/'summary.json').exists()], suite/'comparison.csv')
+    done = sum((job_path(suite, j)/'summary.json').exists() for j in plan['jobs'])
+    compare([job_path(suite, j) for j in plan['jobs']
+             if (job_path(suite, j)/'summary.json').exists()], suite/'comparison.csv')
     print(f'Suite completed {done}/{len(plan["jobs"])} models. '
           f'Resume: python literature_experiment.py suite --resume "{suite}"', flush=True)
 
@@ -331,6 +409,10 @@ def main():
     p = sub.add_parser('compare')
     p.add_argument('--runs', nargs='+', required=True)
     p.add_argument('--output', default='runs/literature_tiny/comparison.csv')
+    p = sub.add_parser('repair-suite', help='Recover ff14146 suite after the FP16 attention fix')
+    p.add_argument('--from-suite', required=True)
+    p.add_argument('--output', default='runs/literature_tiny')
+    p.add_argument('--max-minutes', type=float)
     args = parser.parse_args()
     minutes = getattr(args, 'max_minutes', None)
     if minutes is not None and minutes <= 0:
@@ -339,6 +421,8 @@ def main():
     try:
         if args.command == 'compare':
             compare(args.runs, args.output)
+        elif args.command == 'repair-suite':
+            repair_suite(args, deadline)
         elif args.command == 'suite':
             if len(set(args.variants)) != len(args.variants) or len(set(args.seeds)) != len(args.seeds):
                 parser.error('Duplicate variants or seeds')

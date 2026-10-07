@@ -3,7 +3,8 @@
 Upstream: xxxnell/how-do-vits-work @ 9571ff1370f31af2f433558fbfa7bc87a97b0bab
 Sources: models/{alternet,attentions,preresnet_dnn_block,classifier_block}.py
 Modified for this project: self-contained imports; omit unused ablation/dropout
-variants; register relative indices as buffers; configurable Tiny stem stride.
+variants; register relative indices as buffers; configurable Tiny stem stride;
+FP32 attention island for AMP numerical safety (projections, QK, softmax, AV).
 Attention2d upstream credits https://github.com/lucidrains/vit-pytorch.
 See third_party/ALTER_NET_NOTICE.md and Apache-2.0.txt.
 """
@@ -49,6 +50,11 @@ class Attention2d(nn.Module):
         )
 
     def forward(self, x, mask=None):
+        with torch.autocast(device_type=x.device.type, enabled=False):
+            x = x.float() if x.dtype in (torch.float16, torch.bfloat16) else x
+            return self._attention(x, mask)
+
+    def _attention(self, x, mask=None):
         b, n, _, y = x.shape
         qkv = (self.to_q(x), *self.to_kv(x).chunk(2, dim=1))
         q, k, v = map(lambda t: rearrange(t, 'b (h d) x y -> b h (x y) d', h=self.heads), qkv)

@@ -16,6 +16,9 @@ acknowledges https://github.com/lucidrains/vit-pytorch.
 Modifications: self-contained imports/helper functions; rename Bottleneck to
 PreBottleneck; omit unused variants; use timm DropPath (inactive at sd=0);
 register relative indices as nonpersistent buffers for device transfers.
+Attention2d now disables autocast inside its projections, QK/AV and softmax
+computations, using FP32 to avoid FP16 overflow; its mathematical operations
+and parameterization are otherwise preserved.
 The builder selects the author's dnn_50 layout, sets 200 classes, uses a
 4x4 window and a 3x3 stride-2 stem without maxpool for native Tiny ImageNet.
 No dropout, stochastic depth, cyclic shift or extra FFN has been added.

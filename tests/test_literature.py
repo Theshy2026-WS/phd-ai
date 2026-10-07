@@ -1,4 +1,5 @@
 import argparse
+import copy
 import json
 from pathlib import Path
 import tempfile
@@ -18,6 +19,7 @@ from models.literature_resnet import build_model, BoTAttention, VARIANTS
 from utils.literature_profiling import estimate_flops
 from utils.profiling import estimate_model_flops
 import literature_experiment as experiment
+from utils.literature_legacy import LEGACY_SOURCES, is_legacy_source
 
 
 class LiteratureTests(unittest.TestCase):
@@ -90,6 +92,80 @@ class LiteratureTests(unittest.TestCase):
             self.assertTrue(torch.isfinite(loss))
             for p in m.parameters():
                 self.assertTrue(torch.isfinite(p.grad).all())
+
+    def test_fp16_overflow_regression(self):
+        m = BoTAttention(8, 4, heads=2).eval()
+        with torch.no_grad():
+            m.qkv.weight.fill_(0.25)
+        x = torch.full((2, 8, 4, 4), 200.)
+        with torch.autocast('cpu', dtype=torch.float16):
+            q, k, _ = m.qkv(x).reshape(2, 3, 2, 4, 16).unbind(1)
+            old_logits = (q.transpose(-2, -1) / 2) @ k
+            self.assertFalse(torch.isfinite(old_logits).all())
+            self.assertFalse(torch.isfinite(old_logits.float().softmax(-1)).all())
+            fixed = m(x)
+        self.assertEqual(fixed.dtype, torch.float32)
+        self.assertTrue(torch.isfinite(fixed).all())
+        torch.testing.assert_close(fixed, m(x))
+        fixed.square().mean().backward()
+        self.assertTrue(torch.isfinite(m.qkv.weight.grad).all())
+        a = Attention2d(8, 8, heads=2, dim_head=4).eval()
+        with torch.no_grad():
+            a.to_q.weight.fill_(0.25)
+            a.to_kv.weight.fill_(0.25)
+        with torch.autocast('cpu', dtype=torch.float16):
+            fixed_a, weights = a(x)
+        self.assertTrue(torch.isfinite(fixed_a).all())
+        self.assertTrue(torch.isfinite(weights).all())
+        torch.testing.assert_close(fixed_a, a(x)[0])
+
+    def test_legacy_compatibility_is_cnn_only_and_exact(self):
+        legacy = {path: choices[0] for path, choices in LEGACY_SOURCES.items()}
+        self.assertTrue(is_legacy_source(legacy))
+        summary = dict(variant='resnet50', source_hashes=legacy)
+        self.assertEqual(experiment.comparable_source(summary), experiment.source_hashes())
+        summary['variant'] = 'botnet50'
+        self.assertNotEqual(experiment.comparable_source(summary), experiment.source_hashes())
+        changed = dict(legacy, **{'main.py': 'unknown modification'})
+        self.assertFalse(is_legacy_source(changed))
+        self.assertFalse(is_legacy_source({}))
+
+    def test_repair_creates_new_suite_without_overwriting_old_runs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            original = Path(tmp)/'old'
+            cnn = original/'resnet50_seed42'
+            bot = original/'botnet50_seed42'
+            cnn.mkdir(parents=True)
+            bot.mkdir()
+            config = yaml.safe_load(experiment.DEFAULT_CONFIG.read_text())
+            legacy = {path: choices[0] for path, choices in LEGACY_SOURCES.items()}
+            old = dict(config=config, source_hashes=legacy,
+                       jobs=[dict(variant=v, seed=42, directory=f'{v}_seed42') for v in VARIANTS])
+            experiment.save_json(original/'suite.json', old)
+            summary = dict(protocol=experiment.PROTOCOL, variant='resnet50', seed=42,
+                           source_hashes=legacy, recipe_hash=experiment.recipe_hash(config),
+                           completed_epochs=15, environment={'synthetic': True}, split_hash='test')
+            experiment.save_json(cnn/'summary.json', summary)
+            (bot/'last.pt').write_bytes(b'old partial checkpoint must stay untouched')
+            before = {p: p.read_bytes() for p in original.rglob('*') if p.is_file()}
+            args = argparse.Namespace(from_suite=str(original), output=str(Path(tmp)/'repaired'))
+            with patch.object(experiment, 'runtime', return_value=('cpu', False, torch.float16, None)), \
+                 patch.object(experiment, 'environment', return_value={'synthetic': True}), \
+                 patch.object(experiment, 'prepare_datasets', return_value=({}, {}, 'test')), \
+                 patch.object(experiment, 'run_suite') as runner:
+                experiment.repair_suite(args, None)
+                runner.assert_called_once()
+            repaired = json.loads((Path(args.resume)/'suite.json').read_text())
+            self.assertEqual(repaired['jobs'][0]['reuse_run'], str(cnn.resolve()))
+            self.assertNotIn('reuse_run', repaired['jobs'][1])
+            self.assertEqual(repaired['source_hashes'], experiment.source_hashes())
+            for path, contents in before.items():
+                self.assertEqual(contents, path.read_bytes())
+            bad = copy.deepcopy(old)
+            bad['source_hashes']['main.py'] = 'unknown modification'
+            experiment.save_json(original/'suite.json', bad)
+            with self.assertRaisesRegex(ValueError, 'exact ff14146'):
+                experiment.repair_suite(args, None)
 
     def test_attention_flops_include_functional_matmuls(self):
         for variant in ('botnet50', 'alternet50'):

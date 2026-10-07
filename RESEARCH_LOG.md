@@ -2,6 +2,22 @@
 
 Last updated: 2026-10-07
 
+## 2026-10-07 FP16 attention stability repair
+
+- Workbench report: ResNet-50 completed 15 epochs, held-out Top-1 48.38%,
+  Top-5 74.57%, training 974.1 seconds. BoTNet completed epoch 1, then failed
+  during epoch 2 evaluation with non-finite loss; no valid epoch 2 checkpoint.
+- Reproduced an implementation-level FP16 attention overflow on synthetic
+  inputs: QK became infinite before conversion to FP32 for softmax. This
+  supports, but does not prove, the cause of the specific uninspected L4 batch.
+- Keep attention projections, dot products and aggregation in FP32 for both
+  BoTNet and AlterNet; retain AMP for convolutions. Record precision explicitly.
+- Added exact-snapshot recovery: preserve completed CNN results and original
+  provenance, create a new suite, restart attention from epoch 1, and leave
+  old runs intact. No blanket bypass of source/config/split/environment checks.
+- CPU FP16 regression, source compatibility and recovery tests added. Actual
+  L4 confirmation remains the user's next run; no accuracy gain is inferred.
+
 ## 2026-10-07 Literature first ResNet 50 family screening
 
 Current direction supersedes the historical next-step proposals below: compare

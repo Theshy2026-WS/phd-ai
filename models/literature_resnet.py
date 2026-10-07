@@ -36,6 +36,13 @@ No output projection or FFN: the surrounding ResNet bottleneck supplies them.
         self.register_buffer('relative_w', relative[1], persistent=False)
 
     def forward(self, x):
+        # FP16 dot products can overflow BEFORE softmax. Casting logits after
+        # QK is too late; keep projections, relative terms, QK and AV in FP32.
+        # Preserve double precision for reference tests. Surrounding CNN stays AMP.
+        with torch.autocast(device_type=x.device.type, enabled=False):
+            return self._attention(x.float() if x.dtype in (torch.float16, torch.bfloat16) else x)
+
+    def _attention(self, x):
         b, c, h, w = x.shape
         if (h, w) != (self.size, self.size):
             raise ValueError(f'BoTAttention expects {self.size}x{self.size}, got {h}x{w}')
@@ -92,4 +99,5 @@ def architecture_description(variant):
                 if variant in ('preact50', 'alternet50') else 'torchvision ResNet-50 v1.5; BoTNet paper equations'),
         adaptation=True,
         attention_blocks=6 if variant == 'alternet50' else 3 if variant == 'botnet50' else 0,
+        attention_precision='fp32 island' if variant in ('botnet50', 'alternet50') else 'outer autocast',
     )
