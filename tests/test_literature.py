@@ -20,6 +20,7 @@ from utils.literature_profiling import estimate_flops
 from utils.profiling import estimate_model_flops
 import literature_experiment as experiment
 from utils.literature_legacy import LEGACY_SOURCES, is_legacy_source
+from utils.literature_eval_migration import SOURCES_85DD1E7
 
 
 class LiteratureTests(unittest.TestCase):
@@ -118,6 +119,21 @@ class LiteratureTests(unittest.TestCase):
         self.assertTrue(torch.isfinite(fixed_a).all())
         self.assertTrue(torch.isfinite(weights).all())
         torch.testing.assert_close(fixed_a, a(x)[0])
+
+    def test_evaluation_disables_amp_for_entire_model(self):
+        model = nn.Sequential(nn.Flatten(), nn.Linear(3*4*4, 200, bias=False))
+        with torch.no_grad():
+            model[1].weight.fill_(100.)
+        x = torch.full((2, 3, 4, 4), 100.)
+        with torch.autocast('cpu', dtype=torch.float16):
+            self.assertFalse(torch.isfinite(model(x)).all())
+        batches = [(x, torch.zeros(2, dtype=torch.long), ['a', 'b'])]
+        scores = experiment.evaluate(model, batches, 'cpu', True, torch.float16)
+        self.assertTrue(torch.isfinite(torch.tensor(scores['nll'])))
+        with torch.no_grad():
+            model[1].weight.fill_(float('nan'))
+        with self.assertRaisesRegex(RuntimeError, 'Non-finite FP32'):
+            experiment.evaluate(model, batches, 'cpu', True, torch.float16)
 
     def test_legacy_compatibility_is_cnn_only_and_exact(self):
         legacy = {path: choices[0] for path, choices in LEGACY_SOURCES.items()}
@@ -237,6 +253,73 @@ class LiteratureTests(unittest.TestCase):
                 with patch.object(experiment, 'source_hashes', return_value={}):
                     with self.assertRaisesRegex(ValueError, 'Source changed'):
                         experiment.train_run(None, None, None, partial, resume=True)
+
+    def test_evaluation_migration_resumes_optimizer_without_retraining(self):
+        def toy_model(variant, seed):
+            with torch.random.fork_rng(devices=[]):
+                torch.manual_seed(seed)
+                return nn.Sequential(nn.Conv2d(3, 4, 1), nn.ReLU(), nn.AdaptiveAvgPool2d(1),
+                                     nn.Flatten(), nn.Linear(4, 200))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            images = root/'images'/'class0'
+            images.mkdir(parents=True)
+            for i in range(8):
+                Image.new('RGB', (64, 64), (i*20, 40, 60)).save(images/f'{i}.png')
+            folder = ImageFolder(root/'images')
+            def fake_data(config, seed):
+                return {k: UtilityDataset(folder, ids, k, seed) for k, ids in
+                        [('train', [0, 1, 2, 3]), ('selection', [4, 5]), ('audit', [6, 7])]}, {}, 'synthetic'
+            config = yaml.safe_load(experiment.DEFAULT_CONFIG.read_text())
+            config['dataset'].update(batch_size=2, num_workers=0)
+            config['training'].update(epochs=2, mixed_precision=False, enable_tf32=False)
+            config['training']['scheduler']['warmup_epochs'] = 1
+            config['profiling'].update(warmup_iterations=0, benchmark_iterations=1)
+            original = root/'original'
+            partial = original/'botnet50_seed42'
+            legacy = {p: choices[0] for p, choices in SOURCES_85DD1E7.items()}
+            with patch('datasets.resnet_tiny.make_datasets', fake_data), patch.object(experiment, 'build_model', toy_model):
+                experiment.train_run(config, 'botnet50', 42, partial, deadline=time.perf_counter()-1)
+                cnn = root/'completed_cnn'
+                experiment.train_run(config, 'resnet50', 42, cnn)
+                old_cnn_last = torch.load(cnn/'last.pt', weights_only=False)
+                for name in ('best.pt', 'last.pt'):
+                    state = torch.load(cnn/name, weights_only=False)
+                    state['metadata']['source_hashes'] = {p: choices[0] for p, choices in LEGACY_SOURCES.items()}
+                    state['metadata'].pop('evaluation_precision', None)
+                    state['metadata'].pop('inference_precision', None)
+                    experiment.atomic_save(cnn/name, state)
+                for name in ('best.pt', 'last.pt'):
+                    state = torch.load(partial/name, weights_only=False)
+                    state['metadata']['source_hashes'] = legacy
+                    state['metadata'].pop('evaluation_precision', None)
+                    state['metadata'].pop('inference_precision', None)
+                    experiment.atomic_save(partial/name, state)
+                experiment.save_json(original/'suite.json', dict(config=config, source_hashes=legacy,
+                    jobs=[dict(variant='resnet50', seed=42, directory='resnet50_seed42', reuse_run=str(cnn)),
+                          dict(variant='botnet50', seed=42, directory='botnet50_seed42')]))
+                old_bytes = (partial/'last.pt').read_bytes()
+                args = argparse.Namespace(from_suite=str(original), output=str(root/'new'))
+                experiment.migrate_fp32_evaluation(args, None)
+                migrated = Path(args.resume)/'botnet50_seed42'
+                self.assertEqual((partial/'last.pt').read_bytes(), old_bytes)
+                migrated_state = torch.load(migrated/'last.pt', weights_only=False)
+                self.assertEqual(migrated_state['epoch'], 2)
+                self.assertEqual(migrated_state['metadata']['evaluation_migration']['completed_epochs_before_migration'], 1)
+                full = root/'full'
+                experiment.train_run(config, 'botnet50', 42, full)
+                complete = torch.load(full/'last.pt', weights_only=False)
+                for k, value in complete['model'].items():
+                    torch.testing.assert_close(value, migrated_state['model'][k], atol=0, rtol=0)
+                summary = json.loads((migrated/'summary.json').read_text())
+                self.assertEqual(summary['evaluation_precision'], 'float32')
+                self.assertEqual(summary['inference_precision'], 'float32')
+                migrated_cnn = torch.load(Path(args.resume)/'resnet50_seed42'/'last.pt', weights_only=False)
+                self.assertEqual(migrated_cnn['epoch'], 2)
+                for key, value in old_cnn_last['model'].items():
+                    torch.testing.assert_close(value, migrated_cnn['model'][key], atol=0, rtol=0)
+                self.assertEqual([r['train_seconds'] for r in old_cnn_last['history']],
+                                 [r['train_seconds'] for r in migrated_cnn['history']])
 
     def test_suite_resume_skips_completed_and_preserves_schedule(self):
         with tempfile.TemporaryDirectory() as tmp:

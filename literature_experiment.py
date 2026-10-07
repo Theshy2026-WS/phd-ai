@@ -7,6 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 import random
+import shutil
 import subprocess
 import time
 import uuid
@@ -28,6 +29,7 @@ from utility_experiment import runtime, sync
 from utils.profiling import benchmark_inference
 from utils.literature_profiling import estimate_flops
 from utils.literature_legacy import is_legacy_source
+from utils.literature_eval_migration import is_attention_fixed_source
 
 ROOT = Path(__file__).resolve().parent
 PROTOCOL = 'tiny-literature-v1-80-10-10'
@@ -46,7 +48,8 @@ def source_hashes():
              'models/literature_alternet.py', 'utils/literature_profiling.py',
              'resnet_experiment.py', 'datasets/resnet_tiny.py', 'datasets/utility_tiny.py',
              'datasets/tiny_imagenet.py', 'main.py', 'utility_experiment.py',
-             'utils/profiling.py', 'requirements-literature.txt', 'utils/literature_legacy.py']
+             'utils/profiling.py', 'requirements-literature.txt', 'utils/literature_legacy.py',
+             'utils/literature_eval_migration.py']
     return {p: hashlib.sha256((ROOT/p).read_bytes()).hexdigest() for p in paths}
 
 
@@ -80,23 +83,20 @@ def recipe_hash(config):
 
 @torch.no_grad()
 def evaluate(model, batches, device, amp, dtype):
-    """Aggregate classification only: no sample predictions or interventions."""
+    """All models use full FP32 evaluation, independently of training AMP."""
     model.eval()
     loss, correct, top5, count = 0., 0, 0, 0
     for x, y, _ in tqdm(batches, desc='Evaluate classification', leave=False):
         x, y = x.to(device), y.to(device)
-        with torch.autocast(device, enabled=amp, dtype=dtype):
-            logits = model(x)
+        with torch.autocast(device, enabled=False):
+            logits = model(x.float())
         logits = logits.float()
         nll = torch.nn.functional.cross_entropy(logits, y, reduction='sum')
         if not torch.isfinite(nll):
             bad_state = [name for name, value in model.state_dict().items()
                          if value.is_floating_point() and not torch.isfinite(value).all()]
-            with torch.autocast(device, enabled=False):
-                fp32_finite = bool(torch.isfinite(model(x.float())).all())
-            raise RuntimeError('Non-finite evaluation loss; '
+            raise RuntimeError('Non-finite FP32 evaluation loss; '
                                f'nonfinite state tensors={bad_state[:8]}; '
-                               f'same-batch FP32 logits finite={fp32_finite}. '
                                'No checkpoint is saved for this epoch.')
         loss += nll.item()
         correct += (logits.argmax(1) == y).sum().item()
@@ -147,6 +147,28 @@ def train_run(config, variant, seed, run, resume=False, deadline=None):
             torch.cuda.set_rng_state_all(saved['rng']['cuda'])
         history, best = saved['history'], saved['best']
         previous_wall = saved['elapsed_wall_seconds']
+        if metadata.get('revalidate_best_fp32', False):
+            # Re-score the saved candidate without retraining or touching optimizer
+            # state. Earlier unretained checkpoints cannot be retrospectively ranked.
+            candidate = torch.load(run/'best.pt', map_location='cpu', weights_only=False)
+            model.load_state_dict(candidate['model'])
+            candidate['selection'] = evaluate(model, loader(datasets['selection'], config['dataset'], seed),
+                                              device, False, dtype)
+            best = candidate['selection']['accuracy']
+            metadata['revalidate_best_fp32'] = False
+            candidate['metadata'] = copy.deepcopy(metadata)
+            atomic_save(run/'best.pt', candidate)
+            model.load_state_dict(saved['model'])
+            saved.update(best=best, metadata=metadata)
+            atomic_save(run/'last.pt', saved)
+            save_json(run/'metadata.json', metadata)
+            random.setstate(saved['rng']['python'])
+            np.random.set_state(saved['rng']['numpy'])
+            torch.set_rng_state(saved['rng']['torch'])
+            if device == 'cuda':
+                torch.cuda.set_rng_state_all(saved['rng']['cuda'])
+            del candidate
+            print(f'Revalidated saved best using FP32: {best:.4f}; resume at epoch {len(history)+1}', flush=True)
         del saved
     else:
         run.mkdir(parents=True, exist_ok=True)
@@ -160,7 +182,8 @@ def train_run(config, variant, seed, run, resume=False, deadline=None):
         metadata = dict(protocol=PROTOCOL, variant=variant, seed=seed, split_hash=fingerprint,
                         source_hashes=source_hashes(), git_commit=commit, git_dirty=dirty,
                         environment=environment(device, amp, dtype), recipe_hash=recipe_hash(config),
-                        architecture=architecture_description(variant),
+                        architecture=architecture_description(variant), evaluation_precision='float32',
+                        inference_precision='float32',
                         params=sum(p.numel() for p in model.parameters()),
                         forward_flops_estimate=estimate_flops(model, device),
                         flops_convention='1 MAC = 2 FLOPs; Conv/Linear/QK/AV/relative dot products; excludes norm, softmax and elementwise ops')
@@ -192,6 +215,7 @@ def train_run(config, variant, seed, run, resume=False, deadline=None):
         selection = evaluate(model, loader(datasets['selection'], config['dataset'], seed), device, amp, dtype)
         sync(device)
         row = dict(epoch=epoch, lr=lr, train_soft_target_loss=loss, train_seconds=train_seconds,
+                   evaluation_precision='float32',
                    selection_seconds=time.perf_counter()-started, peak_training_memory_bytes=peak,
                    **{f'selection_{k}': v for k, v in selection.items()})
         if selection['accuracy'] > best:
@@ -229,7 +253,7 @@ def train_run(config, variant, seed, run, resume=False, deadline=None):
     profiles = {}
     for batch_size in (1, config['dataset']['batch_size']):
         profiles[str(batch_size)] = benchmark_inference(model, (3, 64, 64), device, batch_size,
-                            amp_enabled=amp, amp_dtype=dtype, **config['profiling'])
+                            amp_enabled=False, amp_dtype=dtype, **config['profiling'])
     summary = dict(**metadata, best_epoch=best_epoch, best_selection=best_selection,
                    heldout=heldout, completed_epochs=len(history),
                    total_train_seconds=sum(r['train_seconds'] for r in history),
@@ -261,8 +285,9 @@ def compare(runs, output):
     for _, s in summaries:
         if s['protocol'] != PROTOCOL:
             raise ValueError('Wrong experiment protocol')
-        for key in ('split_hash', 'recipe_hash', 'environment', 'completed_epochs'):
-            if s[key] != summaries[0][1][key]:
+        for key in ('split_hash', 'recipe_hash', 'environment', 'completed_epochs',
+                    'evaluation_precision', 'inference_precision'):
+            if s.get(key, 'legacy AMP') != summaries[0][1].get(key, 'legacy AMP'):
                 raise ValueError(f'Incompatible runs: {key}')
         if comparable_source(s) != comparable_source(summaries[0][1]):
             raise ValueError('Incompatible runs: source_hashes')
@@ -286,6 +311,9 @@ def compare(runs, output):
                          throughput_images_per_second=s['inference'][str(s['inference_batch_size'])]['throughput_images_per_second'],
                          throughput_batch_size=s['inference_batch_size'],
                          git_commit=s['git_commit'],
+                         evaluation_precision=s.get('evaluation_precision', 'legacy AMP'),
+                         inference_precision=s.get('inference_precision', 'legacy AMP'),
+                         resumed_legacy_training=bool(s.get('evaluation_migration')),
                          attention_precision=s['architecture'].get('attention_precision', 'outer autocast'),
                          reused_legacy_cnn=is_legacy_source(s['source_hashes']), run=str(run.resolve())))
     output = Path(output)
@@ -346,11 +374,91 @@ def job_path(suite, job):
     return Path(job['reuse_run']) if 'reuse_run' in job else suite/job['directory']
 
 
+def migrate_fp32_evaluation(args, deadline):
+    """Clone a known suite and resume unchanged training with FP32 evaluation."""
+    original = Path(args.from_suite).resolve()
+    old = json.loads((original/'suite.json').read_text())
+    if not is_attention_fixed_source(old['source_hashes']):
+        raise ValueError('FP32 evaluation migration requires the exact 85dd1e7 suite source')
+    jobs = old['jobs']
+    if not jobs or len({(j['variant'], j['seed']) for j in jobs}) != len(jobs):
+        raise ValueError('Empty or duplicate jobs')
+    config = old['config']
+    device, amp, dtype, _ = runtime(copy.deepcopy(config), jobs[0]['seed'])
+    _, _, fingerprint = prepare_datasets(config, jobs[0]['seed'])
+    # Verify every saved source and recipe before writing anything.
+    origins = []
+    for job in jobs:
+        if job['variant'] not in VARIANTS or not isinstance(job['seed'], int):
+            raise ValueError('Invalid job')
+        run = job_path(original, job).resolve()
+        if (run/'last.pt').exists():
+            state = torch.load(run/'last.pt', map_location='cpu', weights_only=False)
+            meta = state['metadata']
+            known = is_attention_fixed_source(meta['source_hashes']) or (
+                job['variant'] in ('resnet50', 'preact50') and is_legacy_source(meta['source_hashes']))
+            if (not known or meta['protocol'] != PROTOCOL or meta['variant'] != job['variant']
+                    or meta['seed'] != job['seed'] or recipe_hash(state['config']) != recipe_hash(config)
+                    or meta['environment'] != environment(device, amp, dtype) or meta['split_hash'] != fingerprint
+                    or state['epoch'] != len(state['history']) or not (run/'best.pt').exists()):
+                raise ValueError(f'Incompatible checkpoint: {run}')
+            if any(v.is_floating_point() and not torch.isfinite(v).all() for v in state['model'].values()):
+                raise ValueError(f'Checkpoint has non-finite model state: {run}')
+            del state
+        elif (run/'summary.json').exists():
+            raise ValueError(f'Completed run is missing last.pt: {run}')
+        origins.append(run)
+    suite = Path(args.output)/new_name('suite_fp32eval')
+    suite.mkdir(parents=True, exist_ok=False)
+    migrated_jobs = []
+    current_hashes = source_hashes()
+    current_commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+    current_dirty = bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip())
+    for job, origin in zip(jobs, origins):
+        migrated = dict(variant=job['variant'], seed=job['seed'], directory=f'{job["variant"]}_seed{job["seed"]}')
+        migrated_jobs.append(migrated)
+        if not (origin/'last.pt').exists():
+            continue
+        destination = suite/migrated['directory']
+        destination.mkdir()
+        for name in ('config.yaml', 'epochs.csv', 'split_manifest.json'):
+            if (origin/name).exists():
+                shutil.copy2(origin/name, destination/name)
+        last = torch.load(origin/'last.pt', map_location='cpu', weights_only=False)
+        origin_metadata = copy.deepcopy(last['metadata'])
+        save_json(destination/'origin_metadata.json', origin_metadata)
+        meta = copy.deepcopy(origin_metadata)
+        meta.update(source_hashes=current_hashes, git_commit=current_commit, git_dirty=current_dirty,
+                    evaluation_precision='float32', inference_precision='float32', revalidate_best_fp32=True,
+                    evaluation_migration=dict(original_run=str(origin), original_git_commit=origin_metadata['git_commit'],
+                                              original_source_hashes=origin_metadata['source_hashes'],
+                                              completed_epochs_before_migration=last['epoch'],
+                                              selection_note='Earlier epochs selected under AMP; saved best is re-scored in FP32. Unretained checkpoints cannot be re-ranked. Training unchanged.'))
+        last['metadata'] = meta
+        for row in last['history']:
+            row.setdefault('evaluation_precision', 'legacy AMP')
+        atomic_save(destination/'last.pt', last)
+        save_json(destination/'metadata.json', meta)
+        del last
+        best = torch.load(origin/'best.pt', map_location='cpu', weights_only=False)
+        best['metadata'] = copy.deepcopy(meta)
+        atomic_save(destination/'best.pt', best)
+        del best
+        print(f'{job["variant"]}: preserved checkpoint from {origin}; no training restart', flush=True)
+    save_json(suite/'suite.json', dict(config=config, source_hashes=current_hashes, jobs=migrated_jobs,
+                                     migration=dict(original_suite=str(original), evaluation_precision='float32')))
+    args.resume, args.epochs = str(suite), None
+    run_suite(args, deadline)
+
+
 def run_suite(args, deadline):
     if args.resume:
         suite = Path(args.resume)
         plan = json.loads((suite/'suite.json').read_text())
         if plan['source_hashes'] != source_hashes():
+            if is_attention_fixed_source(plan['source_hashes']):
+                raise ValueError('Use migrate-evaluation --from-suite '
+                                 f'"{suite}" to preserve completed training and switch evaluation to FP32')
             if is_legacy_source(plan['source_hashes']):
                 raise ValueError('Old precision version: use repair-suite --from-suite '
                                  f'"{suite}" to preserve CNN results and restart attention safely')
@@ -413,6 +521,10 @@ def main():
     p.add_argument('--from-suite', required=True)
     p.add_argument('--output', default='runs/literature_tiny')
     p.add_argument('--max-minutes', type=float)
+    p = sub.add_parser('migrate-evaluation', help='Resume 85dd1e7 training with complete FP32 evaluation')
+    p.add_argument('--from-suite', required=True)
+    p.add_argument('--output', default='runs/literature_tiny')
+    p.add_argument('--max-minutes', type=float)
     args = parser.parse_args()
     minutes = getattr(args, 'max_minutes', None)
     if minutes is not None and minutes <= 0:
@@ -422,7 +534,10 @@ def main():
         if args.command == 'compare':
             compare(args.runs, args.output)
         elif args.command == 'repair-suite':
-            repair_suite(args, deadline)
+            parser.error('repair-suite is superseded. For an existing suite_fp32fix_... from 85dd1e7, '
+                         'use migrate-evaluation --from-suite PATH; for fresh runs use suite.')
+        elif args.command == 'migrate-evaluation':
+            migrate_fp32_evaluation(args, deadline)
         elif args.command == 'suite':
             if len(set(args.variants)) != len(args.variants) or len(set(args.seeds)) != len(args.seeds):
                 parser.error('Duplicate variants or seeds')

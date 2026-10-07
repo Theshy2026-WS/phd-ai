@@ -5,7 +5,47 @@ fusion method. This runner compares **whole-model performance and cost**; it doe
 not produce rescued/harmed-image tables, interventions or occlusion sweeps.
 Existing ResNet-18 and RepViT code and runs are unchanged.
 
-## Recover the FP16 failure from the first release
+## Current recovery after epoch 6
+
+The second report from `85dd1e7` confirms finite model state and finite full-FP32
+logits on the failing batch, but non-finite mixed-precision evaluation. Protecting
+only attention was insufficient. All selection, held-out evaluation and inference
+benchmarks now use complete FP32 (with the existing TF32 runtime setting).
+Training, its AMP/scaler, augmentation, optimizer and LR schedule are unchanged.
+
+Run once for the reported suite:
+
+```bash
+git pull --ff-only
+python literature_experiment.py migrate-evaluation --from-suite runs/literature_tiny/suite_fp32fix_20261007T163922_803c32
+```
+
+This creates `suite_fp32eval_...`, copying existing checkpoints without deleting
+or changing the originals. ResNet-50 is NOT retrained: its saved selected model
+is re-evaluated and re-benchmarked in FP32. BoTNet continues from the last saved
+epoch (6 in the report), with optimizer/scaler/scheduler/RNG restored, so epoch 7
+is repeated. Pre-activation CNN and AlterNet then run their planned 15 epochs.
+Checkpoint copies need additional disk space. Append `--max-minutes 75` if needed.
+
+After a pause, use `suite --resume` with the NEW printed `suite_fp32eval_...`
+directory. Repeating `migrate-evaluation` creates another copy and should not be
+used as the normal resume command.
+
+The source migration accepts only the recorded `85dd1e7` training implementation
+and the unchanged CNN from `ff14146`; unknown source/recipe/environment/split
+changes are rejected. `origin_metadata.json` and `evaluation_migration` preserve
+the original provenance. Earlier epoch metrics remain labelled `legacy AMP`.
+The saved best candidate is re-scored in FP32 before further checkpoint selection;
+discarded historical checkpoints cannot be retrospectively ranked in FP32.
+These migrated runs remain exploratory screening, not a pristine uniform-policy
+reproduction. Final comparisons should start fresh with the corrected protocol.
+
+The new table reports FP32 evaluation and inference for ALL models, including
+the already-trained CNN; old AMP latency numbers are not mixed into the comparison.
+
+## Historical first attention repair
+
+The old `repair-suite` CLI is now retired; use the current recovery above.
 
 The `ff14146` release computed attention dot products under FP16 autocast.
 Large finite Q/K values can overflow before the FP32 softmax conversion. This
@@ -19,14 +59,14 @@ the original AMP setting. This changes numerical precision and potentially
 runtime, not the architecture or parameter count. Inference measurements use
 the same corrected precision policy; the summary records that policy.
 
-For the reported suite, run **once**:
+The first recovery used the following command (historical, not for current use):
 
 ```bash
 git pull --ff-only
 python literature_experiment.py repair-suite --from-suite runs/literature_tiny/suite_20261007T160009_2cba87
 ```
 
-This creates a NEW `suite_fp32fix_...` directory. It reuses the completed CNN's
+That command created a NEW `suite_fp32fix_...` directory. It reused the completed CNN's
 summary unchanged and restarts BoTNet from epoch 1 of the original 15-epoch
 schedule, followed by the remaining models. The old suite and checkpoints are
 not moved, deleted or overwritten. Old attention checkpoints are not resumed
@@ -177,8 +217,9 @@ Tiny ImageNet score. The original AlterNet paper does not supply such a target.
   biases, normalization and positional parameters excluded from weight decay.
 - RandomResizedCrop, flip, RandAugment, Mixup/CutMix, label smoothing; same
   deterministic per-sample/per-epoch augmentation stream across variants.
-- Batch 64, CUDA AMP float16 with FP32 attention islands, TF32 enabled;
-  source/split/software/attention precision recorded.
+- Training: batch 64, CUDA AMP float16 with FP32 attention islands, TF32 enabled.
+  Evaluation and inference benchmark: complete FP32 for every model.
+  Source/split/software/training and evaluation precision are recorded.
   This common recipe is not either paper's original training procedure.
 - The two model families differ in normalization, block count and attention
   formulation. Whole-model comparisons are valid descriptive results; pair each

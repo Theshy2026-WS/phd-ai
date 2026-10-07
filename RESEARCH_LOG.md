@@ -2,6 +2,23 @@
 
 Last updated: 2026-10-07
 
+## 2026-10-07 Full FP32 evaluation and checkpoint preserving recovery
+
+- Second L4 report: BoTNet completed six epochs (selection Top-1 27.24%), then
+  failed during epoch 7 evaluation. Diagnostic state: all parameters/buffers
+  finite, and the exact failing batch produced finite logits in full FP32.
+  Attention-only FP32 protection did not cover the remaining AMP evaluation path.
+- All selection, held-out evaluation and inference profiling now run in FP32;
+  training and its AMP/scaler/optimizer/schedule are unchanged.
+- New `migrate-evaluation` clones the known 85dd1e7 suite, preserves original
+  files/provenance, re-evaluates the existing CNN without training it again, and
+  resumes BoTNet from epoch 6. Later models retain their 15-epoch plan.
+- Saved best candidates are re-scored in FP32; old epoch metrics remain labelled
+  AMP and unretained old checkpoints cannot be retrospectively ranked. These are
+  pilot runs; final results need fresh uniform-policy runs.
+- Added complete-model FP16 overflow regression and exact optimizer-state resume
+  tests, including a completed CNN. No local L4 or real-data training performed.
+
 ## 2026-10-07 FP16 attention stability repair
 
 - Workbench report: ResNet-50 completed 15 epochs, held-out Top-1 48.38%,
