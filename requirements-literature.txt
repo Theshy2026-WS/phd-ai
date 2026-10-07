@@ -1,0 +1,2 @@
+-r requirements-audit.txt
+einops==0.8.1

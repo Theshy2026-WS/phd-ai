@@ -1,6 +1,33 @@
 # Research Progress Log
 
-Last updated: 2026-10-06
+Last updated: 2026-10-07
+
+## 2026-10-07 Literature first ResNet 50 family screening
+
+Current direction supersedes the historical next-step proposals below: compare
+whole-model results from established designs before designing another fusion
+mechanism. Per-image rescue/harm audits are no longer the main experiment.
+
+- New entry point: `literature_experiment.py`; commands and exact architectural
+  adaptations: [LITERATURE_BASELINES.md](LITERATURE_BASELINES.md).
+- Two matched comparisons: torchvision ResNet-50 vs paper-based BoTNet, and
+  author-style pre-activation CNN (3/4/6/4 blocks) vs author-derived AlterNet.
+  AlterNet core is pinned to upstream commit
+  `9571ff1370f31af2f433558fbfa7bc87a97b0bab`, with license and attribution.
+- Native 64x64 Tiny ImageNet, common stride-2 small-image stem; existing
+  80/10/10 development split preserved, official validation still reserved.
+- Shared AdamW/augmentation recipe, default 15 epochs for initial screening.
+  These are architecture migrations, not original-paper benchmark reproductions
+  or evidence that 15 epochs gives a converged baseline.
+- Aggregate Top-1/Top-5, parameters, attention-aware FLOP estimate, timing,
+  batch-1 latency and batched throughput; no automatic per-image audit.
+- Optional soft time budget and epoch-boundary checkpoint resume for office
+  sessions; resumable suite skips completed models.
+- Local CPU architecture/backprop and synthetic runner tests pass. No real
+  Tiny dataset downloaded, no measured L4 runtime or accuracy available yet.
+- Next: user runs 15-epoch screening and shares `comparison.csv`; select a
+  common longer training budget and multi-seed checks before proposing a
+  gap-driven modification. Earlier ResNet-18/RepViT experiments remain intact.
 
 ## 2026-10-06: new ResNet-18 generalization check (not yet trained on real data)
 
