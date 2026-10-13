@@ -27,3 +27,25 @@ def is_pre_fusion_source(hashes):
             "9822c18c4d8ba3a557c602e9942dfb6a68d67e105ab06f45ced03b3b0937d6b8"):
         normalized["main.py"] = BASELINE_EC0D06A["main.py"]
     return normalized == BASELINE_EC0D06A
+
+
+# Exact 0049d1a snapshot: comparison only, never checkpoint resume.
+BASELINE_0049D1A = dict(BASELINE_EC0D06A, **{
+    'literature_experiment.py': 'ea7c788e784cf1f15db4102381c10d18f5ed7562e59c5b19892028de75e5f3bb',
+    'models/literature_resnet.py': 'f23212c7693513f9f754e72e1d2ae0159cdd24108357b6cd2d6b4b59d13edd48',
+    'utils/literature_profiling.py': 'c65b48bbee49551081885911c80a974c2a54bed4ac451219f2252d68148ed22e',
+    'models/literature_acmix.py': '78ac9a4fde25de98e015e5f77db9c04e2f5c4984391cc8c240cef372d302a6dd',
+    'models/conformer_author.py': 'e7f06522b781dd3b45c0f76a303c80b31cdf190a41c49474c285c10cdf2f0a59',
+    'models/literature_conformer.py': 'eb3bdff59b2e7086097319a5609f86a3abe6b9ef2dfdfc7cf4a9c3588006f063',
+    'utils/literature_training.py': 'bb18858a34666859b5cb975de822380172f902b475fb1119aef57944088d19e7',
+    'utils/literature_fusion_compat.py': '96c072439e206f43916eeacca6d082388a5da8b36b7a70225c2a825e76854e24',
+})
+
+
+def is_pre_twostage_source(hashes):
+    normalized = dict(hashes)
+    if normalized.get('main.py') in (
+            'abb8ce2e957faa9d9147092c3cd56de376203682e3a454d02122dfa0c208f478',
+            '9822c18c4d8ba3a557c602e9942dfb6a68d67e105ab06f45ced03b3b0937d6b8'):
+        normalized['main.py'] = BASELINE_0049D1A['main.py']
+    return normalized == BASELINE_0049D1A

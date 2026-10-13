@@ -25,7 +25,7 @@ from datasets.utility_tiny import loader
 from main import build_scheduler
 from models.literature_resnet import VARIANTS, DEFAULT_VARIANTS, CONTROLS, build_model, architecture_description
 from utils.literature_coatnet_compat import is_pre_coatnet_source
-from utils.literature_fusion_compat import is_pre_fusion_source
+from utils.literature_fusion_compat import is_pre_fusion_source, is_pre_twostage_source
 from resnet_experiment import atomic_save
 from utils.literature_training import train_epoch
 from utility_experiment import runtime, sync
@@ -55,7 +55,8 @@ def source_hashes():
              'utils/literature_eval_migration.py', 'models/literature_coatnet.py',
              'utils/literature_coatnet_compat.py', 'models/literature_acmix.py',
              'models/conformer_author.py', 'models/literature_conformer.py',
-             'utils/literature_training.py', 'utils/literature_fusion_compat.py']
+             'utils/literature_training.py', 'utils/literature_fusion_compat.py',
+             'models/literature_twostage.py']
     return {p: hashlib.sha256((ROOT/p).read_bytes()).hexdigest() for p in paths}
 
 
@@ -276,6 +277,8 @@ def train_run(config, variant, seed, run, resume=False, deadline=None):
 
 def comparable_source(summary):
     hashes = summary['source_hashes']
+    if summary['variant'] in DEFAULT_VARIANTS + ('coatnet0', 'acmix50', 'conformer_tiny') and is_pre_twostage_source(hashes):
+        return source_hashes()
     if summary['variant'] in DEFAULT_VARIANTS + ('coatnet0',) and is_pre_fusion_source(hashes):
         return source_hashes()
     # Additive CoAtNet registration leaves the four completed 4506e0d models

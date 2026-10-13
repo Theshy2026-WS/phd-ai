@@ -395,3 +395,22 @@ python main.py tiny_imagenet_late_local_global_correction.yaml
   and one concrete limitation, then implement a narrowly scoped change. Develop
   with selection data, confirm multiple seeds, and lock the method before testing
   ImageNet-100. Do not label more attention or a new gate alone as novelty.
+
+# 2026-10-13: preactivation / two-stage architecture experiments
+
+- User confirmed two **stages**, not two individual blocks; keep original models.
+- Added `resnet50_preact` (3/4/6/3), `botnet_twostage` (C3/B3),
+  `coatnet_twostage` (MBConv2/Transformer2). Attention runs at 16x16; input 64x64.
+- New four-model suite includes unchanged Conformer, seed42, 100 epochs, unchanged
+  fusion training recipe. No ACmix included. These are capacity-changing
+  architecture experiments, not isolated resolution ablations or original
+  paper-model reproductions. See TWOSTAGE_EXPERIMENTS.md for exact layouts.
+- Added managed Workbench auto-stop wrapper with read-only permission/CUDA
+  preflight, opt-in OS fallback, live logging and suite resume. Cloud stop calls
+  tested with mocks only; actual GCP permissions must pass Workbench preflight.
+- All seven old model forward outputs verified bitwise unchanged against
+  0049d1a at seed42 on CPU. Completed old results retain strict source-whitelist
+  comparison compatibility; checkpoint resume source checks remain strict.
+- Local CPU suite: 40 tests pass, including new shapes, BF16 gradients,
+  checkpoint roundtrip, FLOPs, and managed-stop branches. No training dataset
+  downloaded, no full experiment/GPU speed or accuracy claims.

@@ -12,7 +12,8 @@ from models.literature_alternet import AlterNet, PreBottleneck, AttentionBlockB,
 
 
 DEFAULT_VARIANTS = ('resnet50', 'botnet50', 'preact50', 'alternet50')
-VARIANTS = DEFAULT_VARIANTS + ('coatnet0', 'acmix50', 'conformer_tiny')
+VARIANTS = DEFAULT_VARIANTS + ('coatnet0', 'acmix50', 'conformer_tiny',
+                             'resnet50_preact', 'botnet_twostage', 'coatnet_twostage')
 CONTROLS = {'botnet50': 'resnet50', 'alternet50': 'preact50', 'acmix50': 'resnet50'}
 
 
@@ -65,7 +66,10 @@ def build_model(variant, seed=42):
         raise ValueError(f'Unknown variant: {variant}')
     with torch.random.fork_rng(devices=[]):
         torch.default_generator.manual_seed(seed)
-        if variant == 'acmix50':
+        if variant in ('resnet50_preact', 'botnet_twostage', 'coatnet_twostage'):
+            from models.literature_twostage import build_twostage
+            model = build_twostage(variant)
+        elif variant == 'acmix50':
             from models.literature_acmix import build_acmix
             model = build_acmix()
         elif variant == 'conformer_tiny':
@@ -100,6 +104,9 @@ def build_model(variant, seed=42):
 
 
 def architecture_description(variant):
+    if variant in ('resnet50_preact', 'botnet_twostage', 'coatnet_twostage'):
+        from models.literature_twostage import experiment_description
+        return experiment_description(variant)
     if variant == 'acmix50':
         from models.literature_acmix import acmix_description
         return acmix_description()
