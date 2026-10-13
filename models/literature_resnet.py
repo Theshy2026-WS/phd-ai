@@ -11,7 +11,8 @@ from torchvision.models import resnet50
 from models.literature_alternet import AlterNet, PreBottleneck, AttentionBlockB, StemB
 
 
-VARIANTS = ('resnet50', 'botnet50', 'preact50', 'alternet50')
+DEFAULT_VARIANTS = ('resnet50', 'botnet50', 'preact50', 'alternet50')
+VARIANTS = DEFAULT_VARIANTS + ('coatnet0',)
 CONTROLS = {'botnet50': 'resnet50', 'alternet50': 'preact50'}
 
 
@@ -64,7 +65,10 @@ def build_model(variant, seed=42):
         raise ValueError(f'Unknown variant: {variant}')
     with torch.random.fork_rng(devices=[]):
         torch.default_generator.manual_seed(seed)
-        if variant in ('resnet50', 'botnet50'):
+        if variant == 'coatnet0':
+            from models.literature_coatnet import build_coatnet
+            model = build_coatnet()
+        elif variant in ('resnet50', 'botnet50'):
             model = resnet50(weights=None, num_classes=200)
             model.conv1 = nn.Conv2d(3, 64, 3, stride=2, padding=1, bias=False)
             nn.init.kaiming_normal_(model.conv1.weight, mode='fan_out', nonlinearity='relu')
@@ -90,6 +94,9 @@ def build_model(variant, seed=42):
 
 
 def architecture_description(variant):
+    if variant == 'coatnet0':
+        from models.literature_coatnet import coatnet_description
+        return coatnet_description()
     return dict(
         name=variant, input_size=[3, 64, 64], classes=200, pretrained=False,
         stem='3x3 stride 2, no maxpool', stage_spatial_sizes=[32, 16, 8, 4],

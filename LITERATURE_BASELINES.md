@@ -1,5 +1,68 @@
 # Tiny ImageNet literature baseline experiments
 
+## CoAtNet-0 baseline (2026-10-12)
+
+Run **only the added model**; the four completed 100-epoch runs need not be retrained:
+
+```bash
+git pull --ff-only
+python -m pip install -r requirements-literature.txt
+python literature_experiment.py train --variant coatnet0 --config configs/tiny_imagenet_coatnet.yaml --seed 42
+```
+
+The new YAML defaults to **100 epochs**, with exactly the same recipe as the
+previous literature YAML plus `--epochs 100`. For a smoke test append `--epochs 1`;
+start a NEW run without that override for the full experiment (do not extend a
+finished one-epoch cosine schedule). A smoke run is not a comparison result.
+Default `suite` still runs the original four models, avoiding unexpected extra
+work. For all five from scratch:
+
+```bash
+python literature_experiment.py suite --variants resnet50 botnet50 preact50 alternet50 coatnet0 --seeds 42 --epochs 100
+```
+
+### Architecture and provenance
+
+- Source: `timm==1.0.25`, `coatnet_0_224`, **not** the `_rw` variant. This is
+  timm's third-party paper-derived implementation, not an official author port.
+  Sources: https://arxiv.org/abs/2106.04803 and
+  https://github.com/huggingface/pytorch-image-models/blob/v1.0.25/timm/models/maxxvit.py
+- Native 64x64 input, 200 classes, `pretrained=False`; no weights downloaded.
+- Preserve the two-convolution stem and C-C-T-T stages: MBConv (with SE channel
+  gating), MBConv, relative global self-attention + MLP, relative global
+  self-attention + MLP. Depths 2/3/5/2; widths 96/192/384/768.
+- Preserve original stride-32 pyramid: stem 32x32, stages **16/8/4/2**.
+  Seven attention blocks operate on 4x4 (16 tokens, five blocks) and 2x2
+  (4 tokens, two blocks). This is deliberately NOT the ResNet stride-16
+  adaptation. It is a whole-model reference, not a position-only ablation.
+  A stride-16 CoAtNet would be a separately named future experiment.
+- Use explicit timm attention math in FP32 islands for AMP safety; no global
+  timm backend mutation. Full FP32 evaluation/inference, TF32 setting unchanged.
+  Dropout and stochastic depth are zero. Relative position parameters have no
+  weight decay, as do positional parameters in the existing baselines.
+- FLOPs include QK and AV in addition to Conv/Linear (including SE/MLP and
+  projections). Same partial estimate convention: one MAC = two FLOPs;
+  excludes normalization, softmax, bias additions, pooling and elementwise ops.
+- No matched pure-CNN CoAtNet control is claimed: comparison `control` is blank.
+
+### Compare against already completed runs
+
+Use the new CoAtNet directory printed by `Run:` in place of `NEW_COATNET_RUN`:
+
+```bash
+python literature_experiment.py compare --runs runs/literature_tiny/suite_20261012T162914_11b9ec/resnet50_seed42 runs/literature_tiny/suite_20261012T162914_11b9ec/botnet50_seed42 runs/literature_tiny/suite_20261012T162914_11b9ec/preact50_seed42 runs/literature_tiny/suite_20261012T162914_11b9ec/alternet50_seed42 NEW_COATNET_RUN --output runs/literature_tiny/comparison_with_coatnet.csv
+```
+
+Only exact completed `4506e0d` source fingerprints for the four old variants
+receive the additive-registration compatibility exception. Actual commit and
+source metadata are preserved. Recipe, split, epochs, environment and evaluation
+precision must still match. This exception does NOT enable resuming old training
+under changed source; unknown edits are rejected. Do not edit JSON to bypass checks.
+
+Research sequence: literature baselines -> choose a backbone -> one controlled,
+literature-motivated modification at a time -> multi-seed ablations and final
+whole-model comparison. Adding this baseline is not a novelty claim.
+
 Start with existing ResNet, AlterNet and BoTNet designs before proposing another
 fusion method. This runner compares **whole-model performance and cost**; it does
 not produce rescued/harmed-image tables, interventions or occlusion sweeps.

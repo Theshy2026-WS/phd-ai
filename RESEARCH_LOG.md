@@ -321,7 +321,7 @@ python main.py tiny_imagenet_late_local_global_correction.yaml
 - Final comparisons must use identical splits, epochs, optimizer, augmentation,
   seed policy, and runtime settings.
 
-## Next decisions
+## Historical next decisions (superseded by the literature-baseline phase below)
 
 1. Compare Local-Global Correction with the Late convolutional control.
 2. Record exact parameters and FLOPs from both summary CSV files.
@@ -339,3 +339,21 @@ python main.py tiny_imagenet_late_local_global_correction.yaml
   state-of-the-art model.
 - Novelty must be checked against current literature before naming the final
   contribution.
+
+## 2026-10-12: literature baselines and CoAtNet extension
+
+- Completed user-reported 100-epoch seed-42 suite: ResNet-50 held-out Top-1
+  62.16%, BoTNet-50 62.60%, matched PreAct CNN 63.36%, AlterNet-50 59.50%.
+  These are 80k/10k/10k train/selection/held-out results, not the official
+  Tiny ImageNet validation benchmark. BoTNet's +0.44 pp is single-seed evidence;
+  its best selection accuracy is below ResNet's, so stable superiority is not established.
+- Add `coatnet0` from pinned timm's paper-oriented CoAtNet-0 configuration,
+  native 64x64 input, 200 classes, no pretraining; default new config 100 epochs.
+  Preserve C-C-T-T and stride 32, explicitly reporting 4x4/2x2 attention maps.
+  Keep old architecture construction/initialization and training recipes intact.
+- Use the same timing, parameter, FLOPs, memory and FP32 inference reporting.
+  Completed exact 4506e0d baseline summaries can be compared without retraining.
+- Current plan: complete representative literature-method baselines, then
+  design controlled improvements based on their limitations and literature gaps.
+  Retain strong CNN controls and existing hybrids for the final comparison.
+  Use multiple seeds before claiming a small accuracy improvement.

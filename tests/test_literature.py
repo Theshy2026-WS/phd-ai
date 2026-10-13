@@ -16,6 +16,8 @@ import yaml
 from datasets.utility_tiny import UtilityDataset
 from models.literature_alternet import AttentionBlockB, LocalAttention, Attention2d
 from models.literature_resnet import build_model, BoTAttention, VARIANTS
+from models.literature_coatnet import CoAtAttentionFP32
+from utils.literature_coatnet_compat import BASELINE_4506E0D
 from utils.literature_profiling import estimate_flops
 from utils.profiling import estimate_model_flops
 import literature_experiment as experiment
@@ -32,13 +34,18 @@ class LiteratureTests(unittest.TestCase):
         for variant in VARIANTS:
             with self.subTest(variant=variant):
                 model = build_model(variant)
+                expected_params = dict(resnet50=23910152, botnet50=19198984,
+                                       preact50=28365064, alternet50=34267438,
+                                       coatnet0=24373140)
+                self.assertEqual(sum(p.numel() for p in model.parameters()), expected_params[variant])
                 shapes = []
-                hooks = [getattr(model, f'layer{i}').register_forward_hook(
-                    lambda m, inputs, output: shapes.append(output.shape[-1])) for i in range(1, 5)]
+                stages = model.stages if variant == 'coatnet0' else [getattr(model, f'layer{i}') for i in range(1, 5)]
+                hooks = [stage.register_forward_hook(
+                    lambda m, inputs, output: shapes.append(output.shape[-1])) for stage in stages]
                 output = model(torch.randn(2, 3, 64, 64))
                 for hook in hooks:
                     hook.remove()
-                self.assertEqual(shapes, [32, 16, 8, 4])
+                self.assertEqual(shapes, [16, 8, 4, 2] if variant == 'coatnet0' else [32, 16, 8, 4])
                 self.assertEqual(tuple(output.shape), (2, 200))
                 output.square().mean().backward()
                 for name, p in model.named_parameters():
@@ -54,7 +61,73 @@ class LiteratureTests(unittest.TestCase):
                             self.assertEqual(m.window_size, 4)
                 if variant == 'botnet50':
                     self.assertEqual(sum(isinstance(m, BoTAttention) for m in model.modules()), 3)
+                if variant == 'coatnet0':
+                    self.assertEqual([len(s.blocks) for s in model.stages], [2, 3, 5, 2])
+                    self.assertEqual(sum(isinstance(m, CoAtAttentionFP32) for m in model.modules()), 7)
                 del model, output
+
+    def test_coatnet_matches_timm_fp32_and_checkpoint_reload(self):
+        import timm
+        from timm.models.maxxvit import Attention2d as TimmAttention2d
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(42)
+            reference = timm.create_model('coatnet_0_224', pretrained=False, img_size=64,
+                                          num_classes=200, drop_rate=0., drop_path_rate=0.).eval()
+        for m in reference.modules():
+            if isinstance(m, TimmAttention2d):
+                m.fused_attn = False
+        adapted = build_model('coatnet0', 42).eval()
+        x = torch.randn(2, 3, 64, 64)
+        with torch.no_grad():
+            torch.testing.assert_close(adapted(x), reference(x), rtol=0, atol=0)
+        clone = build_model('coatnet0', 43).eval()
+        clone.load_state_dict(adapted.state_dict(), strict=True)
+        with torch.no_grad():
+            torch.testing.assert_close(clone(x), adapted(x), rtol=0, atol=0)
+        del reference, clone
+        with torch.autocast('cpu', dtype=torch.bfloat16):
+            loss = adapted(x).float().square().mean()
+        loss.backward()
+        self.assertTrue(torch.isfinite(loss))
+        for name, p in adapted.named_parameters():
+            self.assertTrue(torch.isfinite(p.grad).all(), name)
+
+    def test_coatnet_flops_count_qk_and_av(self):
+        model = build_model('coatnet0')
+        base = estimate_model_flops(model, (3, 64, 64), 'cpu')
+        # Five global attention blocks on 4x4 and two on 2x2.
+        expected_extra = 4 * (5 * 16**2 * 384 + 2 * 4**2 * 768)
+        self.assertEqual(estimate_flops(model, 'cpu'), base + expected_extra)
+
+    def test_pre_coatnet_comparison_is_exact_and_variant_limited(self):
+        s = dict(variant='botnet50', source_hashes=dict(BASELINE_4506E0D))
+        self.assertEqual(experiment.comparable_source(s), experiment.source_hashes())
+        s['source_hashes']['main.py'] = 'unknown edit'
+        self.assertNotEqual(experiment.comparable_source(s), experiment.source_hashes())
+        s = dict(variant='coatnet0', source_hashes=dict(BASELINE_4506E0D))
+        self.assertNotEqual(experiment.comparable_source(s), experiment.source_hashes())
+
+    def test_coatnet_config_matches_existing_100_epoch_recipe(self):
+        existing = yaml.safe_load(experiment.DEFAULT_CONFIG.read_text())
+        existing['training']['epochs'] = 100
+        new = yaml.safe_load((experiment.ROOT/'configs/tiny_imagenet_coatnet.yaml').read_text())
+        self.assertEqual(experiment.recipe_hash(existing), experiment.recipe_hash(new))
+
+    def test_coatnet_attention_fp16_overflow_protection(self):
+        from timm.models.maxxvit import Attention2d as TimmAttention2d
+        inner = TimmAttention2d(8, dim_head=4)
+        safe = CoAtAttentionFP32(inner)
+        with torch.no_grad():
+            inner.qkv.weight.fill_(0.25)
+            inner.qkv.bias.zero_()
+        x = torch.full((2, 8, 4, 4), 200.)
+        with torch.autocast('cpu', dtype=torch.float16):
+            q, k, _ = inner.qkv(x).view(2, 2, 12, 16).chunk(3, dim=2)
+            self.assertFalse(torch.isfinite((q.transpose(-1, -2)*inner.scale) @ k).all())
+            actual = safe(x)
+        self.assertEqual(actual.dtype, torch.float32)
+        self.assertTrue(torch.isfinite(actual).all())
+        torch.testing.assert_close(actual, safe(x))
 
     def test_bot_matches_explicit_relative_attention_and_gradients(self):
         m = BoTAttention(8, 3, heads=2).double()
@@ -243,6 +316,14 @@ class LiteratureTests(unittest.TestCase):
                 experiment.train_run(config, 'botnet50', 42, bot)
                 experiment.compare([full, bot], root/'comparison.csv')
                 self.assertIn('delta_vs_control_pp', (root/'comparison.csv').read_text())
+                old_summary = json.loads((bot/'summary.json').read_text())
+                original_sources = old_summary['source_hashes']
+                old_summary['source_hashes'] = dict(BASELINE_4506E0D)
+                experiment.save_json(bot/'summary.json', old_summary)
+                experiment.compare([full, bot], root/'additive_comparison.csv')
+                self.assertEqual(json.loads((bot/'summary.json').read_text())['source_hashes'], BASELINE_4506E0D)
+                old_summary['source_hashes'] = original_sources
+                experiment.save_json(bot/'summary.json', old_summary)
                 with self.assertRaises(ValueError):
                     experiment.compare([full, partial], root/'invalid.csv')
                 summary = json.loads((bot/'summary.json').read_text())

@@ -23,7 +23,8 @@ from tqdm import tqdm
 from datasets.resnet_tiny import prepare_datasets
 from datasets.utility_tiny import loader
 from main import build_scheduler
-from models.literature_resnet import VARIANTS, CONTROLS, build_model, architecture_description
+from models.literature_resnet import VARIANTS, DEFAULT_VARIANTS, CONTROLS, build_model, architecture_description
+from utils.literature_coatnet_compat import is_pre_coatnet_source
 from resnet_experiment import train_epoch, atomic_save
 from utility_experiment import runtime, sync
 from utils.profiling import benchmark_inference
@@ -49,7 +50,8 @@ def source_hashes():
              'resnet_experiment.py', 'datasets/resnet_tiny.py', 'datasets/utility_tiny.py',
              'datasets/tiny_imagenet.py', 'main.py', 'utility_experiment.py',
              'utils/profiling.py', 'requirements-literature.txt', 'utils/literature_legacy.py',
-             'utils/literature_eval_migration.py']
+             'utils/literature_eval_migration.py', 'models/literature_coatnet.py',
+             'utils/literature_coatnet_compat.py']
     return {p: hashlib.sha256((ROOT/p).read_bytes()).hexdigest() for p in paths}
 
 
@@ -127,7 +129,7 @@ def train_run(config, variant, seed, run, resume=False, deadline=None):
     decay, no_decay = [], []
     for name, p in model.named_parameters():
         # Positional embeddings, biases and normalization parameters have no decay.
-        group = no_decay if p.ndim <= 1 or any(k in name for k in ('pos_embedding', 'rel_h', 'rel_w')) else decay
+        group = no_decay if p.ndim <= 1 or any(k in name for k in ('pos_embedding', 'rel_h', 'rel_w', 'rel_pos')) else decay
         group.append(p)
     optimizer = torch.optim.AdamW([{'params': decay, 'weight_decay': t['weight_decay']},
                                    {'params': no_decay, 'weight_decay': 0.}],
@@ -270,6 +272,10 @@ def train_run(config, variant, seed, run, resume=False, deadline=None):
 
 def comparable_source(summary):
     hashes = summary['source_hashes']
+    # Additive CoAtNet registration leaves the four completed 4506e0d models
+    # unchanged. Comparison only: never relax checkpoint resume checks.
+    if summary['variant'] in DEFAULT_VARIANTS and is_pre_coatnet_source(hashes):
+        return source_hashes()
     # The precision repair does not alter CNN forward/training or its recipe.
     # Preserve the original provenance; never rewrite an old run as current.
     if (summary['variant'] in ('resnet50', 'preact50')
@@ -505,14 +511,14 @@ def main():
         p = sub.add_parser(command)
         p.add_argument('--config', default=str(DEFAULT_CONFIG))
         p.add_argument('--output', default='runs/literature_tiny')
-        p.add_argument('--epochs', type=int, help='Default 15 in YAML; fixed total schedule on resume')
+        p.add_argument('--epochs', type=int, help='Override config epochs; fixed total schedule on resume')
         p.add_argument('--resume', help='Existing run directory (train) or suite directory (suite)')
         p.add_argument('--max-minutes', type=float, help='Soft wall-clock budget; pause at epoch boundaries')
         if command == 'train':
             p.add_argument('--variant', choices=VARIANTS)
             p.add_argument('--seed', type=int, default=42)
         else:
-            p.add_argument('--variants', nargs='+', choices=VARIANTS, default=list(VARIANTS))
+            p.add_argument('--variants', nargs='+', choices=VARIANTS, default=list(DEFAULT_VARIANTS))
             p.add_argument('--seeds', '--seed', nargs='+', type=int, default=[42])
     p = sub.add_parser('compare')
     p.add_argument('--runs', nargs='+', required=True)

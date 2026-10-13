@@ -1,6 +1,7 @@
 """Explicit attention MAC accounting on top of Conv/Linear estimates."""
 from models.literature_alternet import Attention2d
 from models.literature_resnet import BoTAttention
+from models.literature_coatnet import CoAtAttentionFP32
 from utils.profiling import estimate_model_flops
 
 
@@ -9,6 +10,13 @@ def estimate_flops(model, device):
 
     def attention_macs(module, inputs, output):
         x = inputs[0]
+        if isinstance(module, CoAtAttentionFP32):
+            # timm CoAtNet attention is NCHW; QKV/proj/MLP counted by
+            # Conv/Linear hooks. Relative bias adds no dot products.
+            b, _, h, w = x.shape
+            n = h*w
+            extra[0] += 2*b*n*n*module.inner.num_heads*module.inner.dim_head
+            return
         b, _, h, w = x.shape
         n = h*w
         if isinstance(module, Attention2d):
@@ -23,7 +31,7 @@ def estimate_flops(model, device):
             extra[0] += 2*b*n*(2*module.size-1)*inner  # q*relative H/W tables
 
     handles = [m.register_forward_hook(attention_macs) for m in model.modules()
-               if isinstance(m, (Attention2d, BoTAttention))]
+               if isinstance(m, (Attention2d, BoTAttention, CoAtAttentionFP32))]
     try:
         base = estimate_model_flops(model, (3, 64, 64), device)
     finally:
