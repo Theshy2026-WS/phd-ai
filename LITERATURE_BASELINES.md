@@ -1,5 +1,69 @@
 # Tiny ImageNet literature baseline experiments
 
+## ACmix and Conformer method baselines (2026-10-13)
+
+Run only the two additions. Existing five completed results are not overwritten
+or retrained. First check the L4 environment with a one-epoch smoke suite:
+
+```bash
+python -m pip install -r requirements-literature.txt
+python -c "import torch; assert torch.cuda.is_available(), 'CUDA unavailable'; print(torch.cuda.get_device_name())"
+python -u literature_experiment.py suite --variants acmix50 conformer_tiny --config configs/tiny_imagenet_fusion.yaml --seeds 42 --epochs 1
+```
+
+Then start a NEW full suite (the YAML defaults to 100 epochs):
+
+```bash
+python -u literature_experiment.py suite --variants acmix50 conformer_tiny --config configs/tiny_imagenet_fusion.yaml --seeds 42
+```
+
+`--epochs 15` is available for screening only. Do not extend a finished short
+cosine schedule and compare it with a fresh 100-epoch experiment. To resume a
+paused full suite, use `suite --resume PRINTED_SUITE_DIRECTORY` on unchanged code.
+The original default suite still contains only the original four variants.
+
+| Variant | Method and native 64x64 geometry | Params | Forward GFLOPs estimate |
+| --- | --- | ---: | ---: |
+| `acmix50` | ResNet-50 3/4/6/3; all middle operators ACmix; stages 32/16/8/4, 7x7 sliding windows, four heads | 16,687,096 | 2.213167104 |
+| `conformer_tiny` | Author Conformer-Ti/16; CNN maps 16/8/4 then final fusion to 2; Transformer stays at 4x4 + CLS, width 384, depth 12, six heads | 23,011,104 | 0.839299072 |
+
+ACmix is an independently written implementation checked numerically against
+the pinned official code, not an official port. The pinned repository has no
+root license file; no upstream ACmix code is vendored in tracked source.
+All 16 operators share QKV between attention and convolution aggregation and
+learn two static scalar mixing weights per block. They are NOT image-dependent
+gates. Native Tiny stem matches our ResNet-50 control. The entire ACmix operator
+uses FP32 under AMP. Activation checkpointing of the attention branch reduces
+saved intermediate memory at a cost in backward compute. It is recorded in
+metadata and must be disclosed when comparing training times. The authors
+explicitly warn about inefficient sliding-window execution in this ResNet
+implementation. FLOPs exclude memory traffic, Unfold, padding and elementwise
+ops, and do not predict latency. See `third_party/ACMIX_NOTICE.md`.
+
+Conformer vendors the Apache-2.0 author core at a pinned commit. The adapter
+preserves the original 7x7+maxpool stem, 11 bidirectional FCUs and two heads.
+Training averages two separate soft-target cross-entropies; inference sums the
+head logits as the author implementation does. Evaluation NLL is on that sum,
+not the author's mean per-head evaluation loss. CLS token has no weight decay.
+This is a whole-model reference, not a matched ResNet attention ablation.
+See `third_party/CONFORMER_NOTICE.md`.
+
+Both use the identical 100-epoch YAML recipe/split/batch/software as CoAtNet.
+No datasets or pretrained weights are downloaded during local tests. CPU tests
+do not establish L4 runtime, batch-64 peak memory or Tiny ImageNet accuracy.
+
+The comparison command accepts the exact prior `ec0d06a` five-model sources and
+the previously supported `4506e0d` four-model sources. It preserves provenance
+and still rejects mismatched recipe, split, environment, epochs or precision.
+This compatibility is for completed-result comparison only, not resume:
+
+```bash
+python literature_experiment.py compare --runs OLD_RESNET_RUN OLD_BOTNET_RUN OLD_PREACT_RUN OLD_ALTERNET_RUN OLD_COATNET_RUN NEW_ACMIX_RUN NEW_CONFORMER_RUN --output runs/literature_tiny/comparison_seven.csv
+```
+
+Replace each placeholder with its actual run directory. If a run is still in
+progress, finish it before updating code; source hashes intentionally gate resume.
+
 ## CoAtNet-0 baseline (2026-10-12)
 
 Run **only the added model**; the four completed 100-epoch runs need not be retrained:
@@ -53,8 +117,9 @@ Use the new CoAtNet directory printed by `Run:` in place of `NEW_COATNET_RUN`:
 python literature_experiment.py compare --runs runs/literature_tiny/suite_20261012T162914_11b9ec/resnet50_seed42 runs/literature_tiny/suite_20261012T162914_11b9ec/botnet50_seed42 runs/literature_tiny/suite_20261012T162914_11b9ec/preact50_seed42 runs/literature_tiny/suite_20261012T162914_11b9ec/alternet50_seed42 NEW_COATNET_RUN --output runs/literature_tiny/comparison_with_coatnet.csv
 ```
 
-Only exact completed `4506e0d` source fingerprints for the four old variants
-receive the additive-registration compatibility exception. Actual commit and
+Exact completed `4506e0d` source fingerprints for the four old variants and
+`ec0d06a` fingerprints for those plus CoAtNet receive the additive-registration
+compatibility exception. Actual commit and
 source metadata are preserved. Recipe, split, epochs, environment and evaluation
 precision must still match. This exception does NOT enable resuming old training
 under changed source; unknown edits are rejected. Do not edit JSON to bypass checks.

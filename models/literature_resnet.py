@@ -12,8 +12,8 @@ from models.literature_alternet import AlterNet, PreBottleneck, AttentionBlockB,
 
 
 DEFAULT_VARIANTS = ('resnet50', 'botnet50', 'preact50', 'alternet50')
-VARIANTS = DEFAULT_VARIANTS + ('coatnet0',)
-CONTROLS = {'botnet50': 'resnet50', 'alternet50': 'preact50'}
+VARIANTS = DEFAULT_VARIANTS + ('coatnet0', 'acmix50', 'conformer_tiny')
+CONTROLS = {'botnet50': 'resnet50', 'alternet50': 'preact50', 'acmix50': 'resnet50'}
 
 
 class BoTAttention(nn.Module):
@@ -65,7 +65,13 @@ def build_model(variant, seed=42):
         raise ValueError(f'Unknown variant: {variant}')
     with torch.random.fork_rng(devices=[]):
         torch.default_generator.manual_seed(seed)
-        if variant == 'coatnet0':
+        if variant == 'acmix50':
+            from models.literature_acmix import build_acmix
+            model = build_acmix()
+        elif variant == 'conformer_tiny':
+            from models.literature_conformer import TinyConformer
+            model = TinyConformer()
+        elif variant == 'coatnet0':
             from models.literature_coatnet import build_coatnet
             model = build_coatnet()
         elif variant in ('resnet50', 'botnet50'):
@@ -94,6 +100,12 @@ def build_model(variant, seed=42):
 
 
 def architecture_description(variant):
+    if variant == 'acmix50':
+        from models.literature_acmix import acmix_description
+        return acmix_description()
+    if variant == 'conformer_tiny':
+        from models.literature_conformer import conformer_description
+        return conformer_description()
     if variant == 'coatnet0':
         from models.literature_coatnet import coatnet_description
         return coatnet_description()

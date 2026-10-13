@@ -357,3 +357,41 @@ python main.py tiny_imagenet_late_local_global_correction.yaml
   design controlled improvements based on their limitations and literature gaps.
   Retain strong CNN controls and existing hybrids for the final comparison.
   Use multiple seeds before claiming a small accuracy improvement.
+
+## 2026-10-13: CoAtNet result and two additional fusion-method baselines
+
+- User archive `coatnet_results.tar.gz` confirms 100 complete epochs and exit
+  code 0. CoAtNet-0 seed 42: best selection 58.63% at epoch 97; held-out Top-1
+  58.22%, Top-5 80.31%; train 6415.32 s, total 6791.07 s; 24.373M parameters,
+  0.720802 estimated forward GFLOPs; FP32 batch-1 8.983 ms, batch-64 6131.99 img/s.
+  Same recipe hash and identical split manifest as the completed ResNet run.
+  Lower FLOPs/high batch throughput did not imply higher accuracy or faster
+  single-image inference. No causal conclusion about spatial compression yet.
+- User priority: improve Top-1 and validate the improvement on other datasets,
+  not efficiency alone. Existing results are single-seed, common-recipe method
+  adaptations, not published-score reproductions or proof of a universal optimum.
+- Add `acmix50` and `conformer_tiny`; pinned method provenance, method-specific
+  dual-head loss, explicit FP32 protection, attention FLOPs and old-result
+  comparison compatibility. Defaults in the new shared YAML: 100 epochs.
+  Smoke runs are separate. No old experiment outputs or data are committed.
+- ACmix: official ResNet structure/equations independently implemented and
+  checked with reference-weight output/gradient comparisons for both strides.
+  Conformer: Apache-licensed author core, tiny/16 settings and two-way FCUs.
+  See LITERATURE_BASELINES.md and the two third-party notices for adaptations.
+- Literature findings guiding the next step:
+  - TransXNet uses input-dependent depthwise convolution and global attention
+    on channel partitions, not adaptive selection of the channel split itself.
+    The authors retain a fixed 1:1 split and explicitly flag stage-dependent
+    ratios as a future possibility. This is a prior-art lead, NOT a verified
+    unoccupied gap as of 2026. Follow-up literature must be checked before claiming
+    novelty. Source: https://arxiv.org/html/2310.19380v4 (Tables VII, IX; Section V).
+  - AdaViT learns per-image patch/head/block usage. Its central experiment
+    reduces T2T-ViT-19 from 8.5 to 3.9 GFLOPs while Top-1 falls from 81.9% to
+    81.1%; it starts with pretrained backbone weights. This supports selective
+    computation, not a claim that routing improves unrestricted Top-1.
+    Source: https://arxiv.org/pdf/2111.15668 (Table 1 and implementation details).
+- Plan: finish these two method references, select one accuracy-oriented parent
+  method with a recent nearest-method comparator, specify one inherited result
+  and one concrete limitation, then implement a narrowly scoped change. Develop
+  with selection data, confirm multiple seeds, and lock the method before testing
+  ImageNet-100. Do not label more attention or a new gate alone as novelty.

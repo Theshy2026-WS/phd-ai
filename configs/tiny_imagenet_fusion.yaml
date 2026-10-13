@@ -1,0 +1,32 @@
+# ACmix / Conformer: common 100-epoch recipe, unchanged split and batch size.
+dataset:
+  data_dir: ./data
+  download: true
+  split_seed: 42
+  batch_size: 64
+  num_workers: 4
+augmentation:
+  crop_scale: [0.6, 1.0]
+  randaugment_ops: 2
+  randaugment_magnitude: 5
+training:
+  epochs: 100
+  learning_rate: 0.0005
+  weight_decay: 0.05
+  label_smoothing: 0.1
+  mixup_alpha: 0.2
+  cutmix_alpha: 1.0
+  mix_probability: 0.5
+  gradient_clip_norm: 5.0
+  mixed_precision: true
+  amp_dtype: float16
+  enable_tf32: true
+  deterministic: false
+  probe_per_class: 1
+  scheduler:
+    name: cosine
+    warmup_epochs: 2
+    min_lr: 0.00001
+profiling:
+  warmup_iterations: 10
+  benchmark_iterations: 50

@@ -32,6 +32,8 @@ class LiteratureTests(unittest.TestCase):
 
     def test_all_architectures_forward_backward_and_layout(self):
         for variant in VARIANTS:
+            if variant in ('acmix50', 'conformer_tiny'):
+                continue  # Separate fusion tests check dual heads and window shapes.
             with self.subTest(variant=variant):
                 model = build_model(variant)
                 expected_params = dict(resnet50=23910152, botnet50=19198984,

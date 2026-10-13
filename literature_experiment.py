@@ -25,7 +25,9 @@ from datasets.utility_tiny import loader
 from main import build_scheduler
 from models.literature_resnet import VARIANTS, DEFAULT_VARIANTS, CONTROLS, build_model, architecture_description
 from utils.literature_coatnet_compat import is_pre_coatnet_source
-from resnet_experiment import train_epoch, atomic_save
+from utils.literature_fusion_compat import is_pre_fusion_source
+from resnet_experiment import atomic_save
+from utils.literature_training import train_epoch
 from utility_experiment import runtime, sync
 from utils.profiling import benchmark_inference
 from utils.literature_profiling import estimate_flops
@@ -51,7 +53,9 @@ def source_hashes():
              'datasets/tiny_imagenet.py', 'main.py', 'utility_experiment.py',
              'utils/profiling.py', 'requirements-literature.txt', 'utils/literature_legacy.py',
              'utils/literature_eval_migration.py', 'models/literature_coatnet.py',
-             'utils/literature_coatnet_compat.py']
+             'utils/literature_coatnet_compat.py', 'models/literature_acmix.py',
+             'models/conformer_author.py', 'models/literature_conformer.py',
+             'utils/literature_training.py', 'utils/literature_fusion_compat.py']
     return {p: hashlib.sha256((ROOT/p).read_bytes()).hexdigest() for p in paths}
 
 
@@ -129,7 +133,7 @@ def train_run(config, variant, seed, run, resume=False, deadline=None):
     decay, no_decay = [], []
     for name, p in model.named_parameters():
         # Positional embeddings, biases and normalization parameters have no decay.
-        group = no_decay if p.ndim <= 1 or any(k in name for k in ('pos_embedding', 'rel_h', 'rel_w', 'rel_pos')) else decay
+        group = no_decay if p.ndim <= 1 or any(k in name for k in ('pos_embedding', 'rel_h', 'rel_w', 'rel_pos', 'cls_token')) else decay
         group.append(p)
     optimizer = torch.optim.AdamW([{'params': decay, 'weight_decay': t['weight_decay']},
                                    {'params': no_decay, 'weight_decay': 0.}],
@@ -272,6 +276,8 @@ def train_run(config, variant, seed, run, resume=False, deadline=None):
 
 def comparable_source(summary):
     hashes = summary['source_hashes']
+    if summary['variant'] in DEFAULT_VARIANTS + ('coatnet0',) and is_pre_fusion_source(hashes):
+        return source_hashes()
     # Additive CoAtNet registration leaves the four completed 4506e0d models
     # unchanged. Comparison only: never relax checkpoint resume checks.
     if summary['variant'] in DEFAULT_VARIANTS and is_pre_coatnet_source(hashes):
