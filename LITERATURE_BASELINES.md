@@ -392,3 +392,54 @@ query-dependent relative attention against an explicit formula, attention FLOP
 accounting, a synthetic train/pause/resume equivalence test, suite resumption,
 and incompatible comparison rejection. No real dataset or L4 training was run
 locally. Data, runs, and checkpoints remain git-ignored.
+# 2026-10-14: BoT CNN-stage preactivation experiment
+
+All previous variants remain available and unchanged. New variant:
+`botnet50_preact_cnn`, with 19,193,480 parameters and estimated 2.532802560
+forward GFLOPs (same FLOPs convention as the existing BoT baseline).
+
+| Variant | Stages 1--3 | Stage 4 | Depths | Attention feature sizes |
+|---|---|---|---|---|
+| `botnet50` | Standard postactivation CNN | Standard BoT bottlenecks | 3/4/6/3 | 8x8, 4x4, 4x4 |
+| `botnet50_preact_cnn` | Full preactivation CNN bottlenecks | **Unchanged** standard BoT bottlenecks | 3/4/6/3 | 8x8, 4x4, 4x4 |
+
+The user's requested ResNet-50 with stage4 attention is already `botnet50`:
+replace each stage4 bottleneck's spatial 3x3 conv with global BoT attention,
+keeping its 1x1 projections, normalization, residual shortcut and classifier.
+It is not a bare Transformer replacing the whole stage. No duplicate alias is
+introduced. The new mixed pre/postactivation variant is not the same as
+`resnet50_preact` with preactivated attention blocks in stage4.
+
+The new model retains the original BoT stem BN/ReLU, stage widths
+256/512/1024/2048, classifier and stage4. CNN block projection shortcuts use
+preactivated inputs; identity shortcuts remain identity; no activation follows
+CNN residual addition. For matched initialization, CNN convolution weights are
+copied from the seed-matched randomly initialized BoT control. New preactivation
+BN layers have default fresh statistics. Stage4/stem/classifier parameters are
+identical at initialization. No pretrained checkpoint is used.
+
+This asks whether changing only CNN-block activation ordering helps this BoT
+setup, not whether a new fusion method is novel. Compare first with `botnet50`;
+comparison with the all-preactivation CNN includes differences in stage4 and
+stem/head normalization. Seed42 alone is exploratory, not statistical proof.
+
+Use the unchanged shared 100-epoch recipe. New two-model suite (no Conformer):
+
+```bash
+python -u literature_experiment.py suite --variants botnet50_preact_cnn botnet50 --config configs/tiny_imagenet_fusion.yaml --seeds 42 --epochs 100
+```
+
+Optional overnight managed stop, **inside tmux**, using the existing checked
+Workbench permissions and same-instance auto-stop wrapper:
+
+```bash
+python -u overnight_twostage.py --check-only --fallback-os-shutdown
+python -u overnight_twostage.py --variants botnet50_preact_cnn botnet50 --epochs 100 --log preact_botnet_100ep_overnight.log --fallback-os-shutdown
+```
+
+The wrapper's default model list is unchanged when `--variants` is omitted.
+Explicit `--variants` selects this new pair. Resume uses the saved suite model
+list, so omit `--variants` with `--resume`. This reruns the BoT control in a new
+directory; old results/checkpoints are not overwritten. Completed 392a385
+results are accepted by exact source-whitelist comparison; checkpoint resume
+still requires unchanged source. Do not pull during active training.

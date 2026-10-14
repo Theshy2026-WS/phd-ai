@@ -1,4 +1,4 @@
-"""Run the four-model suite, then stop THIS Workbench via its managed API.
+"""Run a selected suite (default: four models), then stop THIS Workbench via its managed API.
 
 Run inside tmux. No IAM changes, keys, or cloud SDK installation are needed.
 Permission/metadata checks happen BEFORE training. After training starts, both
@@ -82,13 +82,16 @@ def training_command(args):
     command = [sys.executable, '-u', str(ROOT/'literature_experiment.py'), 'suite']
     if args.resume:
         return command + ['--resume', args.resume]
-    return command + ['--variants', *VARIANTS, '--config', str(ROOT/'configs/tiny_imagenet_fusion.yaml'),
+    return command + ['--variants', *(getattr(args, 'variants', None) or VARIANTS), '--config', str(ROOT/'configs/tiny_imagenet_fusion.yaml'),
                       '--seeds', '42', '--epochs', str(args.epochs)]
 
 
 def main():
+    from models.literature_resnet import VARIANTS as available_variants
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--variants', nargs='+', choices=available_variants,
+                        help='Explicit models; omitted keeps the original four-model suite')
     parser.add_argument('--resume', help='Printed suite directory; keeps its original schedule')
     parser.add_argument('--check-only', action='store_true', help='Check GPU and permissions; NO training or shutdown')
     parser.add_argument('--fallback-os-shutdown', action='store_true', help='Fallback if managed stop fails')
@@ -96,6 +99,10 @@ def main():
     args = parser.parse_args()
     if args.epochs < 1:
         parser.error('epochs must be positive')
+    if args.variants and len(set(args.variants)) != len(args.variants):
+        parser.error('Duplicate variants')
+    if args.resume and args.variants:
+        parser.error('Resume keeps the saved model list; do not pass --variants')
     import torch
     if not torch.cuda.is_available():
         raise RuntimeError('CUDA unavailable; refusing overnight CPU training')

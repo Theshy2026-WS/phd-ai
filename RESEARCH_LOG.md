@@ -414,3 +414,15 @@ python main.py tiny_imagenet_late_local_global_correction.yaml
 - Local CPU suite: 40 tests pass, including new shapes, BF16 gradients,
   checkpoint roundtrip, FLOPs, and managed-stop branches. No training dataset
   downloaded, no full experiment/GPU speed or accuracy claims.
+- 2026-10-14: user requested BoT CNN preactivation and ResNet stage4 attention,
+  preserving all models, seed42/100epochs. The latter is existing `botnet50`;
+  added only `botnet50_preact_cnn` (C-pre3/C-pre4/C-pre6/B-post3) and explicitly
+  documented this interpretation. Full widths/depths retained, original BoT
+  attention/stem/head unchanged; no Conformer in the requested run pair.
+  New parameter count 19,193,480, estimated FLOPs 2,532,802,560. Same recipe.
+  Extended overnight wrapper with explicit model selection, preserving defaults.
+  Kept strict resume checks and added exact 392a385 completed-result comparison
+  compatibility. Added tests for control-weight identity, gradients/optimizer,
+  spatial sizes, checkpoint loading, FLOPs and run selection. All 43 local CPU
+  tests pass; all ten pre-existing model outputs verified bitwise unchanged
+  against 392a385. No full Tiny ImageNet or GPU training performed locally.

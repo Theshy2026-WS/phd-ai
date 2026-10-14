@@ -49,3 +49,21 @@ def is_pre_twostage_source(hashes):
             '9822c18c4d8ba3a557c602e9942dfb6a68d67e105ab06f45ced03b3b0937d6b8'):
         normalized['main.py'] = BASELINE_0049D1A['main.py']
     return normalized == BASELINE_0049D1A
+
+
+# Exact 392a385 snapshot; old architectures unchanged, comparisons only.
+BASELINE_392A385 = dict(BASELINE_0049D1A, **{
+    'literature_experiment.py': '7fca4be253a6c0a7ef42116bbb77f71f91b11992ca87fdc1883c564f61cdb79f',
+    'models/literature_resnet.py': '11838d834df4ad44e08093c523a2ad6c9983b4e47086fbf5f8a992aa0a6b81d1',
+    'utils/literature_fusion_compat.py': '669b5b5bb52049853a8593279f9700c25a3de65892d05e1b81f8beea48b4778c',
+    'models/literature_twostage.py': '63153af9e16274ca77618f69fe3fc571769ac8729d77d5f03f44760c774aef4e',
+})
+
+
+def is_pre_prebot_source(hashes):
+    normalized = dict(hashes)
+    if normalized.get('main.py') in (
+            'abb8ce2e957faa9d9147092c3cd56de376203682e3a454d02122dfa0c208f478',
+            '9822c18c4d8ba3a557c602e9942dfb6a68d67e105ab06f45ced03b3b0937d6b8'):
+        normalized['main.py'] = BASELINE_392A385['main.py']
+    return normalized == BASELINE_392A385
