@@ -31,7 +31,7 @@ class LiteratureTests(unittest.TestCase):
         torch.set_num_threads(2)
 
     def test_all_architectures_forward_backward_and_layout(self):
-        for variant in VARIANTS:
+        for variant in ('resnet50', 'botnet50', 'preact50', 'alternet50', 'coatnet0'):
             if variant in ('acmix50', 'conformer_tiny', 'resnet50_preact', 'botnet_twostage', 'coatnet_twostage', 'botnet50_preact_cnn'):
                 continue  # Separate fusion tests check dual heads and window shapes.
             with self.subTest(variant=variant):

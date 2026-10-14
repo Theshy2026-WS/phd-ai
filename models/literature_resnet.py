@@ -14,9 +14,10 @@ from models.literature_alternet import AlterNet, PreBottleneck, AttentionBlockB,
 DEFAULT_VARIANTS = ('resnet50', 'botnet50', 'preact50', 'alternet50')
 VARIANTS = DEFAULT_VARIANTS + ('coatnet0', 'acmix50', 'conformer_tiny',
                              'resnet50_preact', 'botnet_twostage', 'coatnet_twostage',
-                             'botnet50_preact_cnn')
+                             'botnet50_preact_cnn', 'convmixer768_tiny64', 'convnextv2_tiny64',
+                             'convformer_s18_tiny64', 'caformer_s18_tiny64')
 CONTROLS = {'botnet50': 'resnet50', 'alternet50': 'preact50', 'acmix50': 'resnet50',
-            'botnet50_preact_cnn': 'botnet50'}
+            'botnet50_preact_cnn': 'botnet50', 'caformer_s18_tiny64': 'convformer_s18_tiny64'}
 
 
 class BoTAttention(nn.Module):
@@ -68,7 +69,10 @@ def build_model(variant, seed=42):
         raise ValueError(f'Unknown variant: {variant}')
     with torch.random.fork_rng(devices=[]):
         torch.default_generator.manual_seed(seed)
-        if variant == 'botnet50_preact_cnn':
+        if variant in ('convmixer768_tiny64', 'convnextv2_tiny64', 'convformer_s18_tiny64', 'caformer_s18_tiny64'):
+            from models.literature_mixers import build_mixer
+            model = build_mixer(variant)
+        elif variant == 'botnet50_preact_cnn':
             from models.literature_prebot import replace_cnn_with_preact
             model = replace_cnn_with_preact(build_model('botnet50', seed))
         elif variant in ('resnet50_preact', 'botnet_twostage', 'coatnet_twostage'):
@@ -109,6 +113,9 @@ def build_model(variant, seed=42):
 
 
 def architecture_description(variant):
+    if variant in ('convmixer768_tiny64', 'convnextv2_tiny64', 'convformer_s18_tiny64', 'caformer_s18_tiny64'):
+        from models.literature_mixers import mixer_description
+        return mixer_description(variant)
     if variant == 'botnet50_preact_cnn':
         from models.literature_prebot import prebot_description
         return prebot_description()

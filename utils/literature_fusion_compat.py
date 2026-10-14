@@ -67,3 +67,21 @@ def is_pre_prebot_source(hashes):
             '9822c18c4d8ba3a557c602e9942dfb6a68d67e105ab06f45ced03b3b0937d6b8'):
         normalized['main.py'] = BASELINE_392A385['main.py']
     return normalized == BASELINE_392A385
+
+
+# Exact 0c160b3 sources, comparison only (never resume).
+BASELINE_0C160B3 = dict(BASELINE_392A385, **{
+    'literature_experiment.py': '88af3988c2267df387022db0f3b34731052fff85bc2bc7172e983cb8f6b208cb',
+    'models/literature_resnet.py': '2e3ebb38073192edea38b03b6daaf86d536757a79a1bb306f77d47cc499da5d4',
+    'utils/literature_fusion_compat.py': '57d211bbd286d2222d4cca608ef579fb94005496ba4789da7a880a700aa5ab79',
+    'models/literature_prebot.py': '2dfff7cb2cbb026ee03d78de8fe40256ae2f94daa32521a609324fce7031bb78',
+})
+
+
+def is_pre_mixers_source(hashes):
+    normalized = dict(hashes)
+    if normalized.get('main.py') in (
+            'abb8ce2e957faa9d9147092c3cd56de376203682e3a454d02122dfa0c208f478',
+            '9822c18c4d8ba3a557c602e9942dfb6a68d67e105ab06f45ced03b3b0937d6b8'):
+        normalized['main.py'] = BASELINE_0C160B3['main.py']
+    return normalized == BASELINE_0C160B3

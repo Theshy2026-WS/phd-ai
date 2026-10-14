@@ -426,3 +426,29 @@ python main.py tiny_imagenet_late_local_global_correction.yaml
   spatial sizes, checkpoint loading, FLOPs and run selection. All 43 local CPU
   tests pass; all ten pre-existing model outputs verified bitwise unchanged
   against 392a385. No full Tiny ImageNet or GPU training performed locally.
+
+## 2026-10-14: four modern mixer structure baselines
+
+- User requested ConvMixer, ConvNeXt V2, ConvFormer and CAFormer after the
+  currently running BoT experiment, without removing existing models.
+- Added pinned timm1.0.25 adaptations: `convmixer768_tiny64`,
+  `convnextv2_tiny64`, `convformer_s18_tiny64`, `caformer_s18_tiny64`.
+  Original depths/widths/core blocks retained. ConvMixer patch4 gives a constant
+  16x16 map; hierarchical stems use stride2 for 32/16/8/4 maps. All adaptations
+  and original settings are documented in MIXER_BASELINES.md.
+- Shared seed42/100epoch fusion recipe, no pretraining. ConvNeXt V2 includes
+  GRN but NOT FCMAE pretraining. These are structure adaptations, not paper
+  score reproductions. CAFormer attention has FP32 islands and QK/AV FLOPs.
+- Parameters: 20.419M / 28.017M / 25.135M / 24.702M. Estimated GFLOPs:
+  10.299 / 2.902 / 2.575 / 2.582. ConvMixer may be expensive; run a separate
+  one-epoch smoke suite on L4 before the new 100-epoch suite.
+- Existing eleven models' FP32 outputs and FLOPs verified unchanged against
+  0c160b3. Completed old results remain comparable via exact source whitelist;
+  resume remains strict. Do not pull until the user's active training finishes.
+- Tests cover direct timm equivalence, stage/token shapes, BF16 gradients and
+  optimizer updates, GRN/SepConv counts, checkpoint loading, attention FLOPs,
+  FP16 overflow protection, and synthetic CAFormer training/evaluation/resume.
+  No real dataset, pretrained weights, or cloud training downloaded/run locally.
+- Full local CPU regression: 49 tests passed. Used workspace-local temporary
+  files for the successful run after Windows sandbox temp cleanup permissions
+  blocked the first full-suite attempt. GPU memory/runtime require Workbench smoke.

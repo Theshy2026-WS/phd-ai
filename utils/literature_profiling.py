@@ -4,6 +4,7 @@ from models.literature_resnet import BoTAttention
 from models.literature_coatnet import CoAtAttentionFP32
 from models.literature_acmix import ACmix
 from models.literature_conformer import ConformerAttentionFP32
+from models.literature_mixers import MetaFormerAttentionFP32
 from utils.profiling import estimate_model_flops
 
 
@@ -12,6 +13,10 @@ def estimate_flops(model, device):
 
     def attention_macs(module, inputs, output):
         x = inputs[0]
+        if isinstance(module, MetaFormerAttentionFP32):
+            b, n, _ = x.shape
+            extra[0] += 2*b*n*n*module.inner.attention_dim
+            return
         if isinstance(module, ConformerAttentionFP32):
             b, n, c = x.shape
             extra[0] += 2*b*n*n*c
@@ -45,7 +50,8 @@ def estimate_flops(model, device):
             extra[0] += 2*b*n*(2*module.size-1)*inner  # q*relative H/W tables
 
     handles = [m.register_forward_hook(attention_macs) for m in model.modules()
-               if isinstance(m, (Attention2d, BoTAttention, CoAtAttentionFP32, ACmix, ConformerAttentionFP32))]
+               if isinstance(m, (Attention2d, BoTAttention, CoAtAttentionFP32, ACmix,
+                                 ConformerAttentionFP32, MetaFormerAttentionFP32))]
     try:
         base = estimate_model_flops(model, (3, 64, 64), device)
     finally:

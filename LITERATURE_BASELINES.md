@@ -394,6 +394,10 @@ and incompatible comparison rejection. No real dataset or L4 training was run
 locally. Data, runs, and checkpoints remain git-ignored.
 # 2026-10-14: BoT CNN-stage preactivation experiment
 
+For the subsequent ConvMixer, ConvNeXt V2, ConvFormer and CAFormer structure
+baselines, see [MIXER_BASELINES.md](MIXER_BASELINES.md). Existing variants and
+training recipes below are retained.
+
 All previous variants remain available and unchanged. New variant:
 `botnet50_preact_cnn`, with 19,193,480 parameters and estimated 2.532802560
 forward GFLOPs (same FLOPs convention as the existing BoT baseline).
