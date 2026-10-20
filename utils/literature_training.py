@@ -13,7 +13,7 @@ def soft_target_loss(outputs, targets):
 
 def train_epoch(model, batches, config, seed, epoch, device, amp, dtype, optimizer, scaler):
     from models.literature_conformer import TinyConformer
-    if not isinstance(model, TinyConformer):
+    if not isinstance(model, TinyConformer) and not hasattr(model, 'training_loss'):
         return single_head_train_epoch(model, batches, config, seed, epoch, device, amp,
                                        dtype, optimizer, scaler)
     model.train()
@@ -23,7 +23,8 @@ def train_epoch(model, batches, config, seed, epoch, device, amp, dtype, optimiz
         x, targets = mix_batch(x, y, config['training'], seed, epoch, batch_index)
         optimizer.zero_grad(set_to_none=True)
         with torch.autocast(device, enabled=amp, dtype=dtype):
-            loss = soft_target_loss(model(x), targets)
+            loss = (model.training_loss(x, targets) if hasattr(model, 'training_loss')
+                    else soft_target_loss(model(x), targets))
         if not torch.isfinite(loss):
             raise RuntimeError('Non-finite training loss')
         scaler.scale(loss).backward()

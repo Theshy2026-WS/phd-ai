@@ -59,7 +59,8 @@ def source_hashes():
              'utils/literature_training.py', 'utils/literature_fusion_compat.py',
              'models/literature_twostage.py', 'models/literature_prebot.py',
              'models/literature_mixers.py', 'models/attention_correction.py',
-             'correction_experiment.py', 'models/vit.py']
+             'correction_experiment.py', 'models/vit.py',
+             'models/dual_image_fusion.py', 'dual_image_experiment.py']
     return {p: hashlib.sha256((ROOT/p).read_bytes()).hexdigest() for p in paths}
 
 
@@ -212,7 +213,7 @@ def train_run(config, variant, seed, run, resume=False, deadline=None, model_fac
         save_json(run/'split_manifest.json', manifest)
         history, best, previous_wall = [], -1., 0.
         if model_factory is not None and hasattr(model, 'verify_frozen'):
-            # Keep the unmodified classifier as a selection-only candidate.
+            # Keep the initial model as a selection-only candidate.
             # Training is never required to beat it, and audit labels select nothing.
             initial = evaluate(model, loader(datasets['selection'], config['dataset'], seed),
                                device, False, dtype)
