@@ -91,3 +91,16 @@ the VM is still stopped to limit cost; retrieve the archive after restarting.
 OS fallback can leave a temporarily stale Active status in the Workbench UI.
 Preflight errors do not stop the VM. This does not impose a timeout on hung
 training. Environment variables do not automatically survive a VM restart.
+
+### Reuse credentials after restart
+
+The user may create repository-root `email.txt` on Workbench with two literal
+lines: `GMAIL_USER: address` and `GMAIL_APP_PASSWORD: application-password`.
+Run `chmod 600 email.txt`. This is plaintext storage on the persistent VM disk,
+protected from other ordinary users, not encryption or protection from root.
+The file is ignored by Git and explicitly excluded from analysis bundles.
+Existing nonempty environment values take precedence; missing values are loaded
+from this file. No shell evaluation, secret logging or automatic credential
+creation occurs. Gmail login passwords are not supported substitutes for app
+passwords. If this file was previously committed, ignoring it does not remove
+it from Git history: revoke the exposed app password and remove the tracked file.

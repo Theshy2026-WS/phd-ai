@@ -12,7 +12,7 @@ import time
 
 from overnight_twostage import preflight, stop_workbench
 from overnight_correction import bundle_results
-from run_notified import send_mail
+from run_notified import send_mail, load_email_credentials
 
 ROOT = Path(__file__).resolve().parent
 
@@ -61,6 +61,7 @@ def main():
     from dual_image_experiment import create_suite, JOBS
     if not torch.cuda.is_available():
         raise RuntimeError('CUDA unavailable; no training or shutdown started')
+    load_email_credentials()
     for key in ('GMAIL_USER', 'GMAIL_APP_PASSWORD'):
         if not os.environ.get(key, '').strip():
             raise RuntimeError(f'Missing {key}; no training or shutdown started')

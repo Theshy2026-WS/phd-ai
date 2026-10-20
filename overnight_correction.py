@@ -24,6 +24,7 @@ def bundle_results(suite, log_path):
     with tarfile.open(temporary, 'w:gz') as archive:
         for path in sorted(suite.rglob('*')):
             if (path.is_file() and not path.is_symlink() and
+                    not path.name.lower().startswith(('email.txt', '.env')) and
                     path.suffix in ('.csv', '.json', '.yaml', '.txt')):
                 archive.add(path, arcname=str(Path(suite.name)/path.relative_to(suite)))
         if Path(log_path).is_file():

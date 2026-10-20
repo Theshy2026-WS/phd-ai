@@ -1,6 +1,6 @@
 """Run a command, email its exit status via Gmail, and NEVER shut down the VM.
 
-Requires GMAIL_USER and GMAIL_APP_PASSWORD in the environment. Use an app
+Uses GMAIL_USER/GMAIL_APP_PASSWORD in the environment or private email.txt. Use an app
 password, not your Google login password. Run inside tmux to survive disconnects.
 """
 import argparse
@@ -13,9 +13,47 @@ import ssl
 import subprocess
 import sys
 import time
+import stat
+
+
+def load_email_credentials(path=None):
+    """Parse two literal keys, never execute file content or print secrets.
+
+    Explicit environment values take precedence. The optional local file must
+    be owner-only on POSIX. It is intentionally not a shell source file.
+    """
+    keys = ('GMAIL_USER', 'GMAIL_APP_PASSWORD')
+    if all(os.environ.get(k, '').strip() for k in keys):
+        return
+    path = Path(path) if path is not None else Path(__file__).resolve().parent/'email.txt'
+    if not path.exists():
+        return
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError('email.txt must be a regular private file')
+    if os.name == 'posix' and stat.S_IMODE(path.stat().st_mode) & 0o077:
+        raise RuntimeError('Protect credentials first: chmod 600 email.txt')
+    values = {}
+    for line in path.read_text(encoding='utf-8-sig').splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        # Support KEY: value (user format) and KEY=value, without shell eval.
+        parts = line.replace('=', ':', 1).split(':', 1) if ':' not in line else line.split(':', 1)
+        if len(parts) != 2 or parts[0].strip() not in keys:
+            raise RuntimeError('Invalid email.txt format; expected two credential keys')
+        key, value = parts[0].strip(), parts[1].strip()
+        if key in values or not value or set(value) == {'*'}:
+            raise RuntimeError('Missing, duplicate or placeholder credential in email.txt')
+        values[key] = value
+    if set(values) != set(keys):
+        raise RuntimeError('email.txt must contain both credential keys')
+    for key in keys:
+        if not os.environ.get(key, '').strip():
+            os.environ[key] = values[key]
 
 
 def send_mail(recipient, subject, body, attachment=None):
+    load_email_credentials()
     user = os.environ.get('GMAIL_USER', '').strip()
     password = os.environ.get('GMAIL_APP_PASSWORD', '').replace(' ', '')
     if not user or not password:

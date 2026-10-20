@@ -8,3 +8,7 @@ logs/
 *_overnight.log
 .venv-audit/
 runs/
+email.txt
+email.txt.*
+.env
+.env.*
