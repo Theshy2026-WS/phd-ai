@@ -58,7 +58,8 @@ def source_hashes():
              'models/conformer_author.py', 'models/literature_conformer.py',
              'utils/literature_training.py', 'utils/literature_fusion_compat.py',
              'models/literature_twostage.py', 'models/literature_prebot.py',
-             'models/literature_mixers.py']
+             'models/literature_mixers.py', 'models/attention_correction.py',
+             'correction_experiment.py', 'models/vit.py']
     return {p: hashlib.sha256((ROOT/p).read_bytes()).hexdigest() for p in paths}
 
 
@@ -116,7 +117,7 @@ def evaluate(model, batches, device, amp, dtype):
     return dict(nll=loss/count, accuracy=correct/count, top5_accuracy=top5/count)
 
 
-def train_run(config, variant, seed, run, resume=False, deadline=None):
+def train_run(config, variant, seed, run, resume=False, deadline=None, model_factory=None):
     """Return completion status; a time budget stops only at epoch boundaries."""
     began_run = time.perf_counter()
     run = Path(run)
@@ -131,12 +132,20 @@ def train_run(config, variant, seed, run, resume=False, deadline=None):
         config = copy.deepcopy(config)
     device, amp, dtype, scaler = runtime(config, seed)
     datasets, manifest, fingerprint = prepare_datasets(config, seed)
-    model = build_model(variant, seed).to(device)
+    extra_metadata = {}
+    if model_factory is None:
+        model = build_model(variant, seed)
+    else:
+        model, extra_metadata = model_factory(config, variant, seed, fingerprint)
+    model = model.to(device)
     t = config['training']
     decay, no_decay = [], []
     for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
         # Positional embeddings, biases and normalization parameters have no decay.
-        group = no_decay if p.ndim <= 1 or any(k in name for k in ('pos_embedding', 'rel_h', 'rel_w', 'rel_pos', 'cls_token')) else decay
+        exclude_new_embedding = model_factory is not None and any(k in name for k in ('position_embedding', 'class_token', 'query_embedding'))
+        group = no_decay if exclude_new_embedding or p.ndim <= 1 or any(k in name for k in ('pos_embedding', 'rel_h', 'rel_w', 'rel_pos', 'cls_token')) else decay
         group.append(p)
     optimizer = torch.optim.AdamW([{'params': decay, 'weight_decay': t['weight_decay']},
                                    {'params': no_decay, 'weight_decay': 0.}],
@@ -191,15 +200,27 @@ def train_run(config, variant, seed, run, resume=False, deadline=None):
         metadata = dict(protocol=PROTOCOL, variant=variant, seed=seed, split_hash=fingerprint,
                         source_hashes=source_hashes(), git_commit=commit, git_dirty=dirty,
                         environment=environment(device, amp, dtype), recipe_hash=recipe_hash(config),
-                        architecture=architecture_description(variant), evaluation_precision='float32',
+                        architecture=(extra_metadata['architecture'] if model_factory else architecture_description(variant)), evaluation_precision='float32',
                         inference_precision='float32',
                         params=sum(p.numel() for p in model.parameters()),
                         forward_flops_estimate=estimate_flops(model, device),
                         flops_convention='1 MAC = 2 FLOPs; Conv/Linear/QK/AV/relative dot products; excludes norm, softmax and elementwise ops')
+        metadata.update(extra_metadata)
+        metadata['trainable_params'] = sum(p.numel() for p in model.parameters() if p.requires_grad)
         (run/'config.yaml').write_text(yaml.safe_dump(config), encoding='utf-8')
         save_json(run/'metadata.json', metadata)
         save_json(run/'split_manifest.json', manifest)
         history, best, previous_wall = [], -1., 0.
+        if model_factory is not None and hasattr(model, 'verify_frozen'):
+            # Keep the unmodified classifier as a selection-only candidate.
+            # Training is never required to beat it, and audit labels select nothing.
+            initial = evaluate(model, loader(datasets['selection'], config['dataset'], seed),
+                               device, False, dtype)
+            best = initial['accuracy']
+            metadata['initial_selection'] = initial
+            save_json(run/'metadata.json', metadata)
+            atomic_save(run/'best.pt', dict(model=model.state_dict(), epoch=0, selection=initial,
+                                           metadata=metadata, config=config))
     print(f'Run: {run}\nVariant: {variant}; epochs: {t["epochs"]}; params: {metadata["params"]:,}; '
           f'forward FLOPs (estimate): {metadata["forward_flops_estimate"]:,}', flush=True)
     if t['epochs'] <= 15:
@@ -250,6 +271,8 @@ def train_run(config, variant, seed, run, resume=False, deadline=None):
     del optimizer, scheduler, scaler
     best_state = torch.load(run/'best.pt', map_location='cpu', weights_only=False)
     model.load_state_dict(best_state['model'])
+    if hasattr(model, 'verify_frozen'):
+        model.verify_frozen()
     best_epoch, best_selection = best_state['epoch'], best_state['selection']
     del best_state
     gc.collect()

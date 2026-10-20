@@ -1,6 +1,30 @@
 # Research Progress Log
 
-Last updated: 2026-10-07
+Last updated: 2026-10-20
+
+## 2026-10-20 Frozen CNN correction candidate and unified compact ViT
+
+- New experiment starts from the actual selection-best checkpoint of a completed
+  seed42/100-epoch resnet50_preact run. CNN weights and BN buffers are frozen;
+  a zero-output-initialized branch adds class-logit corrections using 8x8 spatial
+  self-attention and a base-prediction-conditioned cross-attention query.
+- This is a candidate built on side-tuning precedents, NOT a confirmed novelty,
+  guaranteed improvement, or claim of independent/complementary information.
+- Default:25 extra correction epochs plus100-epoch compact pure ViT (existing
+  width224/depth5/patch4 structure), identical parent split and augmentations,
+  FP32 recorded explicitly. Optional pooled branch control; equal-budget
+  fine-tuning, matched-capacity controls and multiseed validation remain future work.
+- Original models are retained. Parent-inclusive and incremental costs are
+  separately reported. Selection can retain the unchanged epoch0 classifier.
+- No email. New overnight wrapper packages analysis files before managed stop,
+  including on failure. Optional private GCS export and a local PowerShell
+  downloader support transfer independent of the stopped GPU VM. No claim that
+  an offline laptop can receive a direct Workbench download.
+- No real-data training or GPU deployment executed locally.
+- Validation:30 CPU tests passed, covering exact initial base predictions,
+  unchanged frozen parameters/BN, nonzero attention gradients, pure ViT forward/
+  backward, checkpoint resume, epoch0 selection fallback, archive exclusion,
+  shutdown on archive/export failure, and existing literature baseline regressions.
 
 ## 2026-10-07 Full FP32 evaluation and checkpoint preserving recovery
 
