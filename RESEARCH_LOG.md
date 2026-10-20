@@ -2,6 +2,15 @@
 
 Last updated: 2026-10-20
 
+## 2026-10-20 Daytime execution preference
+
+- Added run_correction_notified.py: only attention correction,25 epochs by
+  default, seed42 and the same trained CNN checkpoint. No ViT or shutdown.
+- Existing Gmail notifier now optionally attaches the small analysis tar.gz,
+  excluding checkpoints and images, after success/failure. App-password preflight
+  blocks training if email authentication fails; no real emails sent in local tests.
+- Existing overnight commands remain available but are not the daytime command.
+
 ## 2026-10-20 Frozen CNN correction candidate and unified compact ViT
 
 - New experiment starts from the actual selection-best checkpoint of a completed

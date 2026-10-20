@@ -46,6 +46,27 @@ Historical `main.py` ViT splits differ and are not directly comparable.
 
 ## Workbench commands
 
+### Daytime: correction only, attachment email, NO shutdown
+
+```bash
+git pull --ff-only
+python -u run_correction_notified.py --epochs 25 --to shenwenfei@gmail.com
+```
+
+Run inside tmux. Uses the existing GMAIL_USER/GMAIL_APP_PASSWORD environment
+variables (Gmail app password, never your normal account password).
+An email preflight happens before training. Only attention_correction runs;
+ViT is not scheduled. After success or failure, the analysis archive is attached
+to the status email. No shutdown call is made; the VM stays running and billable.
+Archives exclude checkpoints/images. Attachments are capped at18 MiB before
+MIME encoding; packaging/size/send errors preserve local files and return a
+nonzero exit status. Email failures are retried three times.
+
+To select the parent explicitly, add `--base-run runs/.../resnet50_preact_seed42`.
+To resume, use `--resume runs/attention_correction/suite_TIMESTAMP_ID --epochs 25`.
+
+### Overnight: correction + ViT, automatic shutdown
+
 Run from the repository. No dataset/checkpoint is committed or downloaded locally.
 
 ```bash

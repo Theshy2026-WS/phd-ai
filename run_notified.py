@@ -15,7 +15,7 @@ import sys
 import time
 
 
-def send_mail(recipient, subject, body):
+def send_mail(recipient, subject, body, attachment=None):
     user = os.environ.get('GMAIL_USER', '').strip()
     password = os.environ.get('GMAIL_APP_PASSWORD', '').replace(' ', '')
     if not user or not password:
@@ -25,19 +25,27 @@ def send_mail(recipient, subject, body):
     message['To'] = recipient
     message['Subject'] = subject
     message.set_content(body)
+    if attachment is not None:
+        attachment = Path(attachment)
+        # Leave room for MIME/base64 expansion within typical SMTP limits.
+        if attachment.stat().st_size > 18 * 1024 * 1024:
+            raise ValueError('Analysis archive exceeds the 18 MiB attachment limit.')
+        message.add_attachment(attachment.read_bytes(), maintype='application',
+                               subtype='gzip', filename=attachment.name)
     with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=30,
                           context=ssl.create_default_context()) as smtp:
         smtp.login(user, password)
         smtp.send_message(message)
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--to', required=True)
     parser.add_argument('--log', default='mixers_100ep_overnight.log')
     parser.add_argument('--test-email', action='store_true')
+    parser.add_argument('--analysis-suite', help='Package this correction suite and attach it to the completion email')
     parser.add_argument('command', nargs=argparse.REMAINDER)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     command = args.command
     if command and command[0] == '--':
         command = command[1:]
@@ -87,10 +95,31 @@ def main():
                 f'Elapsed: {(time.monotonic()-started)/3600:.2f} hours\n'
                 f'Log: {log_path}\nInstance is NOT automatically stopped.\n\n'
                 'Last output lines:\n' + ''.join(tail))
+        archive = None
+        if args.analysis_suite:
+            try:
+                from overnight_correction import bundle_results
+                # This helper ONLY packages files; never invokes shutdown.
+                archive = bundle_results(args.analysis_suite, log_path)
+                body += f'\n\nAnalysis archive: {archive}\n'
+                if archive.stat().st_size > 18 * 1024 * 1024:
+                    raise ValueError('Attachment too large')
+            except Exception as exc:
+                body += (f'\nAttachment unavailable ({type(exc).__name__}); '
+                         'analysis files remain on the instance.\n')
+                archive = None
+                if code == 0:
+                    code = 2
         sent = False
         for attempt in range(3):
             try:
-                send_mail(args.to, f'[Tiny ImageNet] {status}', body)
+                subject = f'[Tiny ImageNet] {status}'
+                if args.analysis_suite and archive is None:
+                    subject += ' / ATTACHMENT FAILED'
+                if archive is None:
+                    send_mail(args.to, subject, body)
+                else:
+                    send_mail(args.to, subject, body, attachment=archive)
                 sent = True
                 print('Completion email accepted by Gmail.', flush=True)
                 break
