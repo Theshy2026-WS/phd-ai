@@ -77,14 +77,14 @@ from a cold first epoch. FLOPs include both branches, inference is measured.
 
 ## Email then stop (explicit overnight alternative)
 
-New dual-image suites default to early stopping with `--patience 5` (0 disables).
-After five consecutive selection Top-1 evaluations that do not strictly exceed
+New dual-image suites default to early stopping with `--patience 10` (0 disables).
+After ten consecutive selection Top-1 evaluations that do not strictly exceed
 the historical best (including epoch0 where available), the current job finishes
 using best.pt and the suite continues. Ties count as no improvement. The original
 100/100/25/100 schedules remain maximum horizons; cosine scheduling is unchanged.
 Summary/comparison record actual epochs and early-stop status. Other experiment
 configs remain unchanged unless they set training.early_stopping_patience.
-Patience5 can stop a weak new ViT before it learns useful complementary features;
+Early stopping can stop a weak new ViT before it learns useful complementary features;
 this is a screening tradeoff, not evidence the method cannot improve.
 Do not git-pull during training or expect a running process to hot-reload this
 setting. Old source-locked suites cannot silently resume under modified code.

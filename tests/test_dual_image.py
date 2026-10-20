@@ -70,6 +70,7 @@ class DualImageTests(unittest.TestCase):
                 args = runner.arguments().parse_args(['--smoke'] if smoke else [])
                 suite = runner.create_suite(args)
                 plan = json.loads((suite/'suite.json').read_text())
+                self.assertEqual(plan['config']['training']['early_stopping_patience'], 10)
                 self.assertEqual([j['epochs'] for j in plan['jobs']],
                                  [1]*4 if smoke else [100, 100, 25, 100])
 

@@ -52,7 +52,7 @@ def finish(suite, log, url, fallback, recipient, code):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--base-run')
-    parser.add_argument('--patience', type=int, default=5, help='Early stopping patience; 0 disables')
+    parser.add_argument('--patience', type=int, default=10, help='Early stopping patience; 0 disables')
     parser.add_argument('--to', default='shenwenfei@gmail.com')
     parser.add_argument('--fallback-os-shutdown', action='store_true')
     parser.add_argument('--check-only', action='store_true')

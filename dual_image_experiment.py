@@ -52,7 +52,7 @@ def factory(plan):
 def create_suite(args):
     parent, summary, checkpoint = find_parent(args.base_run)
     config = copy.deepcopy(checkpoint['config'])
-    config['training']['early_stopping_patience'] = getattr(args, 'patience', 5)
+    config['training']['early_stopping_patience'] = getattr(args, 'patience', 10)
     if config['training']['early_stopping_patience'] < 0:
         raise ValueError('Patience must be nonnegative')
     data = Path(config['dataset']['data_dir'])
@@ -129,7 +129,7 @@ def run_suite(suite):
 def arguments():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--base-run', help='Completed 100-epoch resnet50_preact seed42 directory')
-    p.add_argument('--patience', type=int, default=5, help='Selection Top-1 patience; 0 disables early stopping')
+    p.add_argument('--patience', type=int, default=10, help='Selection Top-1 patience; 0 disables early stopping')
     p.add_argument('--smoke', action='store_true', help='Separate one-epoch screening for every job')
     p.add_argument('--variants', nargs='+', choices=JOBS, default=list(JOBS))
     p.add_argument('--resume', help='Resume a suite without changing its saved schedule')
