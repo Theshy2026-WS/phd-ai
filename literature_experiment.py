@@ -118,6 +118,17 @@ def evaluate(model, batches, device, amp, dtype):
     return dict(nll=loss/count, accuracy=correct/count, top5_accuracy=top5/count)
 
 
+def stale_selection_epochs(history, initial_best=-1.):
+    """Strict historical-best Top-1 improvement; ties consume patience."""
+    best, stale = initial_best, 0
+    for row in history:
+        if row['selection_accuracy'] > best:
+            best, stale = row['selection_accuracy'], 0
+        else:
+            stale += 1
+    return stale
+
+
 def train_run(config, variant, seed, run, resume=False, deadline=None, model_factory=None):
     """Return completion status; a time budget stops only at epoch boundaries."""
     began_run = time.perf_counter()
@@ -140,6 +151,9 @@ def train_run(config, variant, seed, run, resume=False, deadline=None, model_fac
         model, extra_metadata = model_factory(config, variant, seed, fingerprint)
     model = model.to(device)
     t = config['training']
+    patience = t.get('early_stopping_patience', 0)
+    if not isinstance(patience, int) or patience < 0:
+        raise ValueError('early_stopping_patience must be a nonnegative integer')
     decay, no_decay = [], []
     for name, p in model.named_parameters():
         if not p.requires_grad:
@@ -227,6 +241,11 @@ def train_run(config, variant, seed, run, resume=False, deadline=None, model_fac
     if t['epochs'] <= 15:
         print('This short schedule is screening, not a converged paper reproduction.', flush=True)
     for epoch in range(len(history)+1, t['epochs']+1):
+        stale = stale_selection_epochs(history, metadata.get('initial_selection', {}).get('accuracy', -1.))
+        if patience and stale >= patience:
+            print(f'Early stopping: selection Top-1 has not improved for {stale} epochs. '
+                  'Restoring best checkpoint and continuing to the next job.', flush=True)
+            break
         if deadline is not None and history:
             estimate = np.mean([r['train_seconds']+r['selection_seconds'] for r in history[-3:]])*1.15
             if time.perf_counter()+estimate > deadline:
@@ -289,6 +308,8 @@ def train_run(config, variant, seed, run, resume=False, deadline=None, model_fac
                             amp_enabled=False, amp_dtype=dtype, **config['profiling'])
     summary = dict(**metadata, best_epoch=best_epoch, best_selection=best_selection,
                    heldout=heldout, completed_epochs=len(history),
+                   planned_epochs=t['epochs'], early_stopping_patience=patience,
+                   stopped_early=len(history) < t['epochs'],
                    total_train_seconds=sum(r['train_seconds'] for r in history),
                    total_selection_seconds=sum(r['selection_seconds'] for r in history),
                    heldout_seconds=heldout_seconds,

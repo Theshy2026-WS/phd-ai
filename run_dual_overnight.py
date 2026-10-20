@@ -52,10 +52,13 @@ def finish(suite, log, url, fallback, recipient, code):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--base-run')
+    parser.add_argument('--patience', type=int, default=5, help='Early stopping patience; 0 disables')
     parser.add_argument('--to', default='shenwenfei@gmail.com')
     parser.add_argument('--fallback-os-shutdown', action='store_true')
     parser.add_argument('--check-only', action='store_true')
     args = parser.parse_args()
+    if args.patience < 0:
+        parser.error('--patience must be nonnegative')
     import torch
     from correction_experiment import find_parent
     from dual_image_experiment import create_suite, JOBS
@@ -77,7 +80,8 @@ def main():
     if args.check_only:
         print('Preflight OK; no training or shutdown performed.')
         return
-    suite = create_suite(argparse.Namespace(base_run=args.base_run, smoke=False, variants=list(JOBS)))
+    suite = create_suite(argparse.Namespace(base_run=args.base_run, smoke=False,
+                                          variants=list(JOBS), patience=args.patience))
     print(f'Suite: {suite}', flush=True)
     log_path = suite/'training.log'
     code = 1
