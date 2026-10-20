@@ -30,7 +30,10 @@ def bundle_results(suite, log_path):
             archive.add(log_path, arcname=f'{suite.name}/training.log')
         for name in ('models/attention_correction.py', 'models/vit.py',
                      'correction_experiment.py', 'literature_experiment.py',
-                     'overnight_correction.py', 'ATTENTION_CORRECTION.md'):
+                     'overnight_correction.py', 'ATTENTION_CORRECTION.md',
+                     'models/dual_image_fusion.py', 'dual_image_experiment.py',
+                     'utils/literature_training.py', 'run_dual_overnight.py',
+                     'DUAL_IMAGE_EXPERIMENTS.md'):
             archive.add(ROOT/name, arcname=f'{suite.name}/source/{name}')
     temporary.replace(destination)
     return destination

@@ -74,3 +74,20 @@ Do not change source or schedules when resuming. Both commands leave the VM on.
 Send `comparison.csv`, `suite.json` and each job's `summary.json` / `epochs.csv`.
 The rough full-training projection excludes setup/profiling and is unreliable
 from a cold first epoch. FLOPs include both branches, inference is measured.
+
+## Email then stop (explicit overnight alternative)
+
+`python -u run_dual_overnight.py --fallback-os-shutdown` starts fresh full
+100/100/25/100 schedules at seed42. Add `--base-run PATH` if needed.
+`--check-only` checks the parent, CUDA, managed stop permission and sends a test
+email without training or shutdown. Run inside tmux with existing exported
+`GMAIL_USER` and `GMAIL_APP_PASSWORD`; never use a Google login password.
+No credentials are stored or passed to the training child.
+
+After success or failure, small analysis files and sources are packaged, email
+is attempted up to three times, then managed Workbench stop is requested.
+Datasets/checkpoints are excluded from email and remain on disk. If email fails,
+the VM is still stopped to limit cost; retrieve the archive after restarting.
+OS fallback can leave a temporarily stale Active status in the Workbench UI.
+Preflight errors do not stop the VM. This does not impose a timeout on hung
+training. Environment variables do not automatically survive a VM restart.
