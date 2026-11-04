@@ -1,7 +1,8 @@
-"""Time-budgeted Tiny ImageNet data audit and generalization repair study.
+"""Tiny ImageNet data audit and generalization repair study.
 
 One seed, independent hypotheses, matched controls, and auditable best/last
-models. The notification wrapper handles a single email and Workbench stop.
+models. Complete every finite scheduled job by default; an explicit time
+budget remains available. The wrapper handles one email and Workbench stop.
 """
 import argparse
 import copy
@@ -38,15 +39,15 @@ def source_hashes():
 def atomic_json(path, value):
     path = Path(path)
     temporary = path.with_suffix(path.suffix+'.tmp')
-    temporary.write_text(json.dumps(value, indent=2), encoding='utf-8')
+    temporary.write_text(json.dumps(value, indent=2, allow_nan=False), encoding='utf-8')
     temporary.replace(path)
 
 
 class ActiveBudget:
-    """Persist active runtime across restarts; do not reset a resumed budget."""
+    """Persist active runtime, with an optional cutoff retained across resume."""
     def __init__(self, suite, max_hours, interval=30.):
         self.path = Path(suite)/'budget.json'
-        self.max_seconds = max_hours*3600
+        self.max_seconds = None if max_hours is None else max_hours*3600
         self.previous = 0.
         if self.path.exists():
             state = json.loads(self.path.read_text(encoding='utf-8'))
@@ -64,12 +65,17 @@ class ActiveBudget:
         return self.previous+time.monotonic()-self.started
 
     def remaining(self):
+        if self.max_seconds is None:
+            return None
         return max(0., self.max_seconds-self.elapsed())
 
     def write(self):
         atomic_json(self.path, dict(protocol=PROTOCOL, max_seconds=self.max_seconds,
             elapsed_active_seconds=self.elapsed(),
-            note='Active child runtime; heartbeat30s. Cooperative epoch cutoff, not a hung-process watchdog.'))
+            complete_all=self.max_seconds is None,
+            note=('Active child runtime; heartbeat30s. Complete all finite scheduled jobs without time cutoffs.'
+                  if self.max_seconds is None else
+                  'Active child runtime; heartbeat30s. Cooperative epoch cutoff, not a hung-process watchdog.')))
 
     def _heartbeat(self):
         while not self.stop_event.wait(self.interval):
@@ -100,12 +106,16 @@ def _outside(output, parent, previous):
 def make_plan(args):
     warm = 1 if args.smoke else (30 if args.warm_epochs is None else args.warm_epochs)
     fresh = 1 if args.smoke else (100 if args.fresh_epochs is None else args.fresh_epochs)
-    hours = 12. if args.max_hours is None else args.max_hours
+    complete_all = bool(getattr(args, 'complete_all', False) or args.max_hours is None)
+    if getattr(args, 'complete_all', False) and args.max_hours is not None:
+        raise ValueError('Choose complete-all or an explicit max_hours budget, not both')
+    hours = None if complete_all else args.max_hours
     if not 1 <= warm <= 30 or not 1 <= fresh <= 100:
         raise ValueError('Warm epochs must be1..30 and fresh epochs1..100')
-    if not math.isfinite(hours) or not .25 <= hours <= 48:
+    if hours is not None and (not math.isfinite(hours) or not .25 <= hours <= 48):
         raise ValueError('max_hours must be a finite number in0.25..48')
-    if not 5 <= args.reserve_minutes <= min(120, hours*30):
+    maximum_reserve = 120 if hours is None else min(120, hours*30)
+    if not 5 <= args.reserve_minutes <= maximum_reserve:
         raise ValueError('Reserve5..120 minutes, at most half the total budget, for final analysis/email')
     if args.examples < 0:
         raise ValueError('Examples must be nonnegative')
@@ -128,7 +138,8 @@ def make_plan(args):
         parent_checkpoint_sha256=checkpoint_hash, seed=summary['seed'], split_hash=fingerprint,
         config=config, config_recipe_hash=recipe_hash(config), source_hashes=source_hashes(),
         execution_environment=execution_environment(config, summary['seed']),
-        warm_epochs=warm, fresh_epochs=fresh, max_hours=hours, reserve_minutes=args.reserve_minutes,
+        warm_epochs=warm, fresh_epochs=fresh, max_hours=hours, complete_all=complete_all,
+        reserve_minutes=args.reserve_minutes,
         examples=args.examples, smoke=bool(args.smoke), stages=['data_audit', 'previous_last', 'training'],
         audit_partition_evaluated=False, official_validation_evaluated=False,
         note='Development screening: fix only supported problems; a large train/selection gap is not proof of a dataset bug')
@@ -152,6 +163,9 @@ def validate_resume(path):
         raise ValueError('Resume requires the recorded generalization protocol and source files')
     if recipe_hash(plan['config']) != plan['config_recipe_hash']:
         raise ValueError('Saved configuration changed')
+    complete_all = plan.get('complete_all', plan['max_hours'] is None)
+    if complete_all != (plan['max_hours'] is None):
+        raise ValueError('Saved complete-all/time-budget mode is inconsistent')
     _, summary, state, checkpoint_hash = load_spatial_parent(plan['parent_run'])
     del state
     if (checkpoint_hash != plan['parent_checkpoint_sha256'] or summary['seed'] != plan['seed']
@@ -172,16 +186,24 @@ def run_suite(path):
     if not torch.cuda.is_available():
         raise RuntimeError('CUDA required for the overnight generalization study')
     outcomes, fatal_data = {}, False
+    complete_all = plan.get('complete_all', plan['max_hours'] is None)
     with ActiveBudget(suite, plan['max_hours']) as budget:
-        work_deadline = time.monotonic()+max(0., budget.remaining()-plan['reserve_minutes']*60)
+        work_deadline = (None if complete_all else
+            time.monotonic()+max(0., budget.remaining()-plan['reserve_minutes']*60))
+
+        def diagnostic_deadline():
+            # Complete-all removes the old45-minute diagnostic stage limits as
+            # well as the total cutoff. Each stage still has a finite workload.
+            return None if complete_all else min(work_deadline, time.monotonic()+45*60)
+
         stages = (
             ('data_audit', lambda: run_data_audit(plan['parent_run'], suite/'data_audit',
                 config=copy.deepcopy(plan['config']), examples=plan['examples'],
                 previous_fusion=plan['previous_fusion'],
-                deadline=min(work_deadline, time.monotonic()+45*60))),
+                deadline=diagnostic_deadline())),
             ('previous_last', lambda: run_previous_last(plan['parent_run'], plan['previous_fusion'],
                 suite/'previous_last', config=copy.deepcopy(plan['config']), examples=plan['examples'],
-                deadline=min(work_deadline, time.monotonic()+45*60))),
+                deadline=diagnostic_deadline())),
             ('training', lambda: run_training_study(plan['parent_run'], suite/'training',
                 config=copy.deepcopy(plan['config']), epochs=plan['warm_epochs'],
                 fresh_epochs=plan['fresh_epochs'], deadline=work_deadline,
@@ -192,10 +214,12 @@ def run_suite(path):
             if fatal_data:
                 outcomes[name] = dict(status='blocked', reason='Concrete fatal data-integrity errors in the audit')
                 continue
-            if time.monotonic() >= work_deadline:
+            if work_deadline is not None and time.monotonic() >= work_deadline:
                 outcomes[name] = dict(status='deferred', reason='Preserving the final analysis/email reserve')
                 continue
-            print(f'\nGeneralization stage: {name}; remaining total budget={budget.remaining()/3600:.2f}h', flush=True)
+            timing = ('complete-all, no time cutoff' if complete_all else
+                      f'remaining total budget={budget.remaining()/3600:.2f}h')
+            print(f'\nGeneralization stage: {name}; {timing}', flush=True)
             atomic_json(suite/'status.json', dict(protocol=PROTOCOL, active_stage=name, outcomes=outcomes))
             try:
                 result = action()
@@ -220,14 +244,16 @@ def run_suite(path):
         partial = any(item['status'] not in ('complete', 'unavailable') for item in outcomes.values())
         status = 'failed' if failed else ('budget_exhausted' if partial else 'complete')
         result = dict(protocol=PROTOCOL, status=status, outcomes=outcomes,
-            elapsed_active_hours=budget.elapsed()/3600, max_hours=plan['max_hours'],
+            elapsed_active_hours=budget.elapsed()/3600, max_hours=plan['max_hours'], complete_all=complete_all,
             parent_checkpoint_unchanged=unchanged, smoke=plan['smoke'],
             warm_epochs=plan['warm_epochs'], fresh_epochs=plan['fresh_epochs'],
             audit_partition_evaluated=False, official_validation_evaluated=False)
         atomic_json(suite/'status.json', result)
         atomic_json(suite/'completion.json', result)
+        timing_description = ('complete all finite scheduled jobs; no time cutoff'
+                              if complete_all else f'active budget {plan["max_hours"]}h')
         (suite/'report.md').write_text('# Overnight generalization study\n\n'
-            f'Status: **{status}**. Seed {plan["seed"]}; active budget {plan["max_hours"]}h.\n\n'
+            f'Status: **{status}**. Seed {plan["seed"]}; {timing_description}.\n\n'
             '- [Data/source/augmentation audit](data_audit/report.md)\n'
             '- [Actual previous last checkpoints](previous_last/report.md)\n'
             '- [Matched training remedies](training/report.md)\n\n'
@@ -249,8 +275,13 @@ def arguments():
     parser.add_argument('--num-workers', type=int)
     parser.add_argument('--warm-epochs', '--epochs', dest='warm_epochs', type=int, help='Default30, maximum30 additional epochs')
     parser.add_argument('--fresh-epochs', type=int, help='Default100, maximum100 fresh epochs')
-    parser.add_argument('--max-hours', type=float, help='Total active child budget; default12h, retained on resume')
-    parser.add_argument('--reserve-minutes', type=float, default=45, help='Reserve for final evaluation/packaging, default45')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--complete-all', action='store_true',
+                      help='Finish all finite scheduled jobs without total or stage time cutoffs (default)')
+    mode.add_argument('--max-hours', type=float,
+                      help='Optional total active child budget; retained on resume')
+    parser.add_argument('--reserve-minutes', type=float, default=45,
+                        help='With --max-hours, reserve for final evaluation/packaging; default45')
     parser.add_argument('--examples', type=int, default=8)
     parser.add_argument('--smoke', action='store_true', help='Separate one-epoch training screen; full data audit')
     parser.add_argument('--output', default=str(ROOT/'runs/generalization_tiny'))
@@ -267,6 +298,8 @@ def main(argv=None):
         if args.smoke or any(getattr(args, key) is not None and getattr(args, key) != plan[key]
             for key in ('warm_epochs', 'fresh_epochs', 'max_hours')):
             raise ValueError('Resume retains the saved horizons and active time budget')
+        if args.complete_all and not plan.get('complete_all', plan['max_hours'] is None):
+            raise ValueError('Resume cannot change an existing time-budgeted suite to complete-all')
         suite = Path(args.resume)
     else:
         suite = create_suite(args)

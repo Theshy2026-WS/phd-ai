@@ -1,4 +1,4 @@
-"""Bounded, parameter-matched controls for Tiny ImageNet generalization.
+"""Finite recipe, readout, depth and normalization controls for generalization.
 
 The study distinguishes readout supervision, augmentation mismatch and a
 sharpness-aware objective. Fresh jobs are compared only with their matched
@@ -30,7 +30,8 @@ from literature_experiment import ROOT, environment, evaluate, new_name, recipe_
 from main import build_scheduler
 from mechanism_diagnostics import load_spatial_parent
 from models.attention_correction import state_digest
-from models.generalization_preact import VARIANTS, build_generalization_model, description, soft_loss
+from models.generalization_preact import (VARIANTS, build_generalization_model, description,
+                                         initialization_family, soft_loss)
 from models.spatial_preact import build_spatial_model
 from resnet_experiment import atomic_save, mix_batch
 from spatial_experiment import (_diagnose, _probe, _save_history, execution_environment,
@@ -58,12 +59,25 @@ def job_config(base, variant, epochs):
                               learning_rate=1e-4 if warm else 5e-4)
     result['training']['scheduler'].update(name='cosine', warmup_epochs=min(1 if warm else 2, epochs-1),
                                           min_lr=1e-6 if warm else 1e-5)
-    if variant == 'warm_gentle':
+    if variant.endswith('_gentle'):
         result['augmentation'].update(crop_scale=[.85, 1.], randaugment_ops=1,
                                       randaugment_magnitude=3)
         result['training'].update(cutmix_alpha=0., mixup_alpha=.2, mix_probability=.5)
-    if variant.endswith('_sam') or variant == 'warm_fp32_control':
+    if variant.endswith('_fp32_control') or variant.endswith('_sam'):
         result['training']['mixed_precision'] = False
+    if variant == 'fresh_no_cutmix':
+        result['training']['cutmix_alpha'] = 0.
+    if variant == 'fresh_no_randaugment':
+        result['augmentation']['randaugment_ops'] = 0
+    if variant == 'fresh_wd_low':
+        result['training']['weight_decay'] = .01
+    if variant == 'fresh_wd_high':
+        result['training']['weight_decay'] = .1
+    if variant == 'fresh_sgd':
+        # A reasonable SGD-family recipe, not an attempt to isolate optimizer
+        # name while holding its unsuitable AdamW hyperparameters constant.
+        result['training'].update(learning_rate=.1, weight_decay=5e-4)
+        result['training']['scheduler'].update(warmup_epochs=min(5, epochs-1), min_lr=1e-4)
     return result
 
 
@@ -242,6 +256,7 @@ def _train_job(plan, variant, run, parent_state, deadline=None):
         split_hash=fingerprint, seed=seed, recipe_hash=recipe_hash(config),
         initial_state_sha256=state_digest(model), environment=environment(device, amp, dtype),
         params=sum(p.numel() for p in model.parameters()), encoder_frozen=False,
+        optimizer_family='SGD-momentum-Nesterov' if variant == 'fresh_sgd' else 'AdamW',
         architecture=description(variant), ema_decay=EMA_DECAY, sam_rho=SAM_RHO if variant.endswith('_sam') else None,
         fresh_optimizer=True, parent_optimizer_resumed=False,
         augmentation_epoch_offset=plan['parent_completed_epochs'] if variant.startswith('warm_') else 0)
@@ -256,8 +271,11 @@ def _train_job(plan, variant, run, parent_state, deadline=None):
     decay, no_decay = [], []
     for parameter in model.parameters():
         (no_decay if parameter.ndim <= 1 else decay).append(parameter)
-    optimizer = torch.optim.AdamW([dict(params=decay, weight_decay=config['training']['weight_decay']),
-                                   dict(params=no_decay, weight_decay=0.)], lr=config['training']['learning_rate'])
+    groups = [dict(params=decay, weight_decay=config['training']['weight_decay']),
+              dict(params=no_decay, weight_decay=0.)]
+    optimizer = (torch.optim.SGD(groups, lr=config['training']['learning_rate'], momentum=.9, nesterov=True)
+                 if variant == 'fresh_sgd' else
+                 torch.optim.AdamW(groups, lr=config['training']['learning_rate']))
     scheduler = build_scheduler(optimizer, config['training'])
     began, elapsed = time.perf_counter(), 0.
     if (run/'last.pt').exists():
@@ -434,12 +452,15 @@ def comparison(output, plan):
                 output/control/left['diagnostic_directory']/'selection/predictions.npz',
                 output/variant/item['diagnostic_directory']/'selection/predictions.npz',
                 output/f'paired_{variant}_best_vs_{control}.csv')
-    if 'warm_sam' in summaries and 'warm_fp32_control' in summaries:
-        left, right = summaries['warm_fp32_control'], summaries['warm_sam']
-        paired['warm_sam_best_vs_warm_fp32_control'] = paired_predictions(
-            output/'warm_fp32_control'/left['diagnostic_directory']/'selection/predictions.npz',
-            output/'warm_sam'/right['diagnostic_directory']/'selection/predictions.npz',
-            output/'paired_warm_sam_best_vs_warm_fp32_control.csv')
+    for scope in ('warm', 'fresh'):
+        sam, control = scope+'_sam', scope+'_fp32_control'
+        if sam in summaries and control in summaries:
+            left, right = summaries[control], summaries[sam]
+            key = f'{sam}_best_vs_{control}'
+            paired[key] = paired_predictions(
+                output/control/left['diagnostic_directory']/'selection/predictions.npz',
+                output/sam/right['diagnostic_directory']/'selection/predictions.npz',
+                output/f'paired_{key}.csv')
     if rows:
         pd.DataFrame(rows).to_csv(output/'comparison.csv', index=False)
     curve_files = []
@@ -457,7 +478,7 @@ def comparison(output, plan):
     save_json(output/'paired_summary.json', paired)
     lines = ['# Generalization correction study', '',
         'All jobs keep seed42 and the original80K/10K development split. Warm jobs start from the same '
-        '100-epoch CNN8. Fresh jobs use identical random initial weights and must be compared with '
+        '100-epoch CNN8. Parameter/buffer-matched fresh jobs use identical random initial weights and must be compared with '
         'their matched fresh control. Selection chooses raw/EMA checkpoints; '
         'this is a development screen, not a final test estimate.', '',
         '| Job | Epochs | Best source/epoch | Best selection | Last raw | Last EMA | Best gap pp |',
@@ -476,8 +497,11 @@ def comparison(output, plan):
         'no CutMix, otherwise retained Mixup/label smoothing/weight decay. It is a recipe bundle, not isolated-factor proof.',
         '- SAM uses two FP32 passes with the same mixed batch, rho.05, AdamW, and only one BN running-stat update. '
         'EMA decay.999 averages parameters and floating buffers; integer counters are copied. Compare warm SAM '
-        'primarily to warm_fp32_control, which has the same precision and learning rate. Fresh SAM is a '
-        'budget-dependent exploratory comparison against an AMP fresh control, with that precision limitation.',
+        'primarily to the corresponding warm/fresh FP32 control, which has the same precision and learning rate.',
+        '- Shallow26 changes depth at fixed widths/stride/head. GN changes normalization while retaining '
+        'convolution/linear initialization. Their full state hashes intentionally differ from full-depth BN.',
+        '- The SGD arm changes optimizer-family LR/weight-decay recipe as well as optimizer. '
+        'No-CutMix/no-RandAugment and low/high WD are explicit individual-factor controls.',
         '- A budget-exhausted job is partial, checkpointed, and resumable. Compare fresh arms at matched epochs '
         'if one was stopped early. The deadline is checked between epochs, not a hard wall-clock kill.',
         '- There is no promise that any regularizer improves this already-regularized model. '
@@ -541,8 +565,11 @@ def run_training_study(parent_run, output_dir, config=None, epochs=30, deadline=
             print(f'Generalization arm {variant} failed ({type(exc).__name__}); attempting remaining arms.', flush=True)
         gc.collect()
         torch.cuda.empty_cache()
-    if len({value for key, value in initial.items() if key.startswith('fresh_')}) > 1:
-        raise RuntimeError('Fresh controls did not share exactly the same initial weights')
+    for family in {initialization_family(key) for key in initial if key.startswith('fresh_')}:
+        digests = {value for key, value in initial.items()
+                   if key.startswith('fresh_') and initialization_family(key) == family}
+        if len(digests) > 1:
+            raise RuntimeError('Layout-matched fresh controls did not share exactly the same initial weights')
     if file_hash(parent/'best.pt') != digest:
         raise RuntimeError('The original parent checkpoint changed')
     budget = len(outcomes)+len(failures) < len(jobs) or any(v['status'] == 'budget_exhausted' for v in outcomes.values())

@@ -12,7 +12,8 @@ import torch
 from torch import nn
 
 import generalization_experiment as runner
-from models.generalization_preact import GeneralizationCNN, build_generalization_model
+from models.generalization_preact import (GeneralizationCNN, build_generalization_model,
+                                         description, initialization_family)
 from models.spatial_preact import build_spatial_model
 from models.attention_correction import state_digest
 from test_baseline_diagnostics import config as original_config, fixture_datasets, toy_model
@@ -112,6 +113,54 @@ class OptimizationTests(unittest.TestCase):
         self.assertEqual(gentle['training']['cutmix_alpha'], 0.)
         self.assertEqual(sam, fp32)
         self.assertFalse(sam['training']['mixed_precision'])
+
+    def test_expanded_individual_factor_recipes_and_matched_fresh_sam(self):
+        base = original_config()
+        base['training']['mixed_precision'] = True
+        control = runner.job_config(base, 'fresh_control', 100)
+        no_cutmix = runner.job_config(base, 'fresh_no_cutmix', 100)
+        self.assertEqual(no_cutmix['training']['cutmix_alpha'], 0.)
+        no_cutmix['training']['cutmix_alpha'] = control['training']['cutmix_alpha']
+        self.assertEqual(no_cutmix, control)
+        no_ra = runner.job_config(base, 'fresh_no_randaugment', 100)
+        self.assertEqual(no_ra['augmentation']['randaugment_ops'], 0)
+        no_ra['augmentation']['randaugment_ops'] = control['augmentation']['randaugment_ops']
+        self.assertEqual(no_ra, control)
+        self.assertEqual(runner.job_config(base, 'fresh_sam', 100),
+                         runner.job_config(base, 'fresh_fp32_control', 100))
+        self.assertEqual(runner.job_config(base, 'fresh_wd_low', 100)['training']['weight_decay'], .01)
+        self.assertEqual(runner.job_config(base, 'fresh_wd_high', 100)['training']['weight_decay'], .1)
+        sgd = runner.job_config(base, 'fresh_sgd', 100)
+        self.assertEqual(sgd['training']['learning_rate'], .1)
+        self.assertEqual(sgd['training']['weight_decay'], 5e-4)
+        self.assertEqual(len(runner.DEFAULT_JOBS), 19)
+
+    def test_depth_and_groupnorm_controls_declare_their_different_state_layouts(self):
+        base = build_generalization_model('fresh_control').eval()
+        shallow = build_generalization_model('fresh_shallow26').eval()
+        grouped = build_generalization_model('fresh_groupnorm').eval()
+        self.assertEqual([len(stage) for stage in shallow.stages], [2, 2, 2, 2])
+        self.assertLess(sum(p.numel() for p in shallow.parameters()), sum(p.numel() for p in base.parameters()))
+        self.assertEqual(sum(p.numel() for p in grouped.parameters()), sum(p.numel() for p in base.parameters()))
+        self.assertFalse(any(isinstance(m, nn.BatchNorm2d) for m in grouped.modules()))
+        self.assertTrue(any(isinstance(m, nn.GroupNorm) for m in grouped.modules()))
+        torch.testing.assert_close(base.stem.weight, grouped.stem.weight, atol=0, rtol=0)
+        torch.testing.assert_close(base.stages[2][0].conv2[2].weight,
+                                   shallow.stages[2][0].conv2[2].weight, atol=0, rtol=0)
+        x = torch.randn(2, 3, 64, 64)
+        for model in (shallow, grouped):
+            self.assertEqual(model(x).shape, (2, 200))
+            self.assertTrue(all(p.requires_grad for p in model.parameters()))
+        self.assertNotEqual(initialization_family('fresh_groupnorm'), initialization_family('fresh_control'))
+        self.assertFalse(description('fresh_shallow26')['parameter_matched'])
+        self.assertEqual(description('fresh_groupnorm')['attention_blocks'], 0)
+
+    def test_fresh_dense_readout_is_full8_with_same_initial_weights(self):
+        control = build_generalization_model('fresh_control')
+        dense = build_generalization_model('fresh_full8')
+        self.assertEqual(state_digest(control), state_digest(dense))
+        self.assertEqual(dense.readout, 'full8')
+        self.assertIsInstance(dense.final_reduction, nn.Identity)
 
 
 class RunnerTests(unittest.TestCase):

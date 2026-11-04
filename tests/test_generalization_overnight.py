@@ -21,7 +21,9 @@ def parser():
     result.add_argument('--resume')
     result.add_argument('--fresh-epochs', type=int)
     result.add_argument('--warm-epochs', type=int)
-    result.add_argument('--max-hours', type=float)
+    mode = result.add_mutually_exclusive_group()
+    mode.add_argument('--max-hours', type=float)
+    mode.add_argument('--complete-all', action='store_true')
     result.add_argument('--smoke', action='store_true')
     result.add_argument('--to', default='recipient@example.com')
     result.add_argument('--check-only', action='store_true')
@@ -358,6 +360,34 @@ class GeneralizationOvernightTests(unittest.TestCase):
                     runner.main(['--resume', 'suite', *extra])
         email.assert_not_called()
         preflight.assert_not_called()
+
+    def test_complete_all_cannot_change_an_existing_bounded_resume(self):
+        fake = fake_suite_module()
+        with patch.dict(sys.modules, {'generalization_suite': fake}), \
+                patch.object(runner, 'arguments', side_effect=parser), \
+                patch('torch.cuda.is_available', return_value=True), \
+                patch.object(runner, 'check_email_ready') as email, \
+                patch.object(runner, 'preflight') as preflight:
+            with self.assertRaisesRegex(ValueError, 'time-budgeted suite'):
+                runner.main(['--resume', 'suite', '--complete-all'])
+        email.assert_not_called()
+        preflight.assert_not_called()
+
+    def test_complete_all_resume_passes_preflight_without_sending_email(self):
+        fake = fake_suite_module()
+        fake.validate_resume.return_value = dict(fresh_epochs=100, warm_epochs=30,
+                                                max_hours=None, complete_all=True)
+        with patch.dict(sys.modules, {'generalization_suite': fake}), \
+                patch.object(runner, 'arguments', side_effect=parser), \
+                patch('torch.cuda.is_available', return_value=True), \
+                patch.object(runner, 'check_email_ready') as ready, \
+                patch.object(runner, 'preflight', return_value='url'), \
+                patch.object(runner, 'send_mail') as mail, \
+                patch.object(runner, 'stop_workbench') as stop:
+            runner.main(['--resume', 'suite', '--complete-all', '--check-only'])
+        ready.assert_called_once()
+        mail.assert_not_called()
+        stop.assert_not_called()
 
 
 if __name__ == '__main__':

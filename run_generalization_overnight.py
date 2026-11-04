@@ -1,4 +1,4 @@
-"""Run the bounded Tiny ImageNet generalization study, email once, then stop Workbench.
+"""Run the finite Tiny ImageNet study to completion, email once, then stop Workbench.
 
 No email is sent during preflight.  SMTP authentication, data/checkpoint checks,
 and managed-stop permissions are checked before a child can arm shutdown.
@@ -323,6 +323,8 @@ def main(argv=None):
     if args.resume:
         if args.smoke:
             raise ValueError('Resume keeps the saved smoke/full protocol and epoch budgets')
+        if getattr(args, 'complete_all', False) and not plan.get('complete_all', plan.get('max_hours') is None):
+            raise ValueError('Resume cannot change an existing time-budgeted suite to complete-all')
         for name in ('fresh_epochs', 'warm_epochs', 'max_hours'):
             requested = getattr(args, name, None)
             if requested is not None and requested != plan.get(name):
