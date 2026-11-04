@@ -1,5 +1,9 @@
 # Tiny ImageNet: investigate the gap, then test bounded remedies
 
+The current primary research queue is [attention feature fusion](ATTENTION_FUSION_STUDY.md).
+The19-job generalization study below is supporting work, not a prerequisite
+for testing attention and not the command for the new attention-first run.
+
 The current parent fits the clean80K training images at99.97% and scores
 64.28% on the held-out10K selection set. This is a real generalization gap.
 It is not, by itself, evidence that the loaders use different datasets.
